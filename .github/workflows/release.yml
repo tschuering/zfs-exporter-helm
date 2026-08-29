@@ -156,10 +156,17 @@ jobs:
           helm package charts/zfs-exporter --destination /tmp/chart
           package="$(ls /tmp/chart/*.tgz)"
 
-          # helm prints the pushed digest on stderr; capture it for cosign.
-          helm push "${package}" "oci://${REGISTRY}/${OWNER}/charts" 2> /tmp/push.log
+          # helm prints "Pushed:" and "Digest:" on stdout, not stderr, so both
+          # streams are captured and echoed back into the log.
+          helm push "${package}" "oci://${REGISTRY}/${OWNER}/charts" > /tmp/push.log 2>&1
           cat /tmp/push.log
-          digest="$(awk '/Digest:/ { print $2 }' /tmp/push.log)"
+
+          digest="$(awk '/^Digest:/ { print $2 }' /tmp/push.log)"
+          if [ -z "${digest}" ]; then
+            echo "::error::no digest in helm push output; cosign cannot sign an empty reference"
+            exit 1
+          fi
+
           version="$(basename "${package}" .tgz | sed 's/^zfs-exporter-//')"
           echo "ref=${REGISTRY}/${OWNER}/charts/zfs-exporter@${digest}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
