@@ -65,9 +65,15 @@ spec:
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- with .Values.extraEnv }}
+          {{- if or .Values.zfsUserlandVersion .Values.extraEnv }}
           env:
+            {{- if .Values.zfsUserlandVersion }}
+            - name: ZFS_USERLAND_VERSION
+              value: {{ .Values.zfsUserlandVersion | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           ports:
             - name: metrics

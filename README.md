@@ -21,25 +21,54 @@ exec.Command(`zfs`,   `get`, `-Hprt`, ...)
 ```
 
 So the image has to carry the OpenZFS userland, and that userland talks to the
-**host's** kernel module through `/dev/zfs`. The two must agree on a major
-version.
+**host's** kernel module through `/dev/zfs`.
 
-This image is built against **OpenZFS 2.3.x**, from Debian trixie's
-`zfsutils-linux`. Running it against a host on 2.2 or 2.4 is unsupported and
-will fail at the ioctl, not at start-up.
+## Host compatibility
+
+**OpenZFS 2.3.x and 2.4.x, from the same tag.** The image bundles a userland
+for each branch and chooses at run time, so a fleet running both is served by
+one DaemonSet and upgrading a node across branches needs no change here.
+
+`cmd/zfs-shim` is installed on `PATH` as `zpool` and `zfs` — the names the
+exporter execs. It reads the node's branch from `/sys/module/zfs/version`,
+which a container can read with no mount at all because module state is not
+namespaced, and starts the matching tree:
+
+```
+/opt/zfs/2.4/lib/ld-linux-x86-64.so.2 \
+    --library-path /opt/zfs/2.4/lib /opt/zfs/2.4/sbin/zpool ...
+```
+
+Each tree carries its own libraries **and its own dynamic loader**, which is
+what lets two userlands built against different glibc coexist — 2.3 links
+`libzfs.so.6`, 2.4 links `libzfs.so.7`, and neither is installed at a standard
+path. Nothing is guessed: a node on a branch the image does not carry gets
+
+```
+zfs-shim: no bundled OpenZFS userland for host version 2.5; this image carries 2.3, 2.4
+```
+
+rather than a confusing ioctl failure. `zfsUserlandVersion` in the chart
+overrides the detection.
+
+Adding a branch is a builder stage and a base image — see the `zfs23` and
+`zfs24` stages in the [Dockerfile](Dockerfile). Each stage asserts the branch
+the base actually shipped, so a base image that moves to a new OpenZFS fails
+the build instead of quietly changing what the image supports.
 
 ## What is in the image
 
-Three things, on `gcr.io/distroless/base-debian13` — no shell, no package
-manager, no apt state:
+On `gcr.io/distroless/base-debian13` — no shell, no package manager, no apt
+state:
 
 | Path | Source |
 | --- | --- |
 | `/usr/local/bin/zfs_exporter` | upstream release, sha256 pinned in `checksums.txt` |
-| `/usr/sbin/zpool`, `/usr/sbin/zfs` | Debian trixie `zfsutils-linux` |
-| shared libraries | whatever `ldd` resolves for those two binaries |
+| `/usr/local/bin/{zpool,zfs}` | symlinks to `zfs-shim`, built from `cmd/zfs-shim` |
+| `/opt/zfs/2.3/` | Debian trixie `zfsutils-linux`, with its libraries and loader |
+| `/opt/zfs/2.4/` | Debian forky `zfsutils-linux`, likewise |
 
-Around 58 MB. Both `linux/amd64` and `linux/arm64`.
+Around 84 MB. Both `linux/amd64` and `linux/arm64`.
 
 The exporter binary is verified against digests kept in this repository rather
 than the `sha256sums.txt` served next to the release. A sums file in the same
@@ -62,7 +91,8 @@ Everything else is off:
 - `hostNetwork: false`, `hostPID: false`
 - no service account token (`automountServiceAccountToken: false`) — the
   exporter never talks to the Kubernetes API
-- one host mount: the `/dev/zfs` character device
+- one host mount: the `/dev/zfs` character device (the branch detection needs
+  no mount — `/sys/module` is already visible)
 
 The exporter reads pool and dataset properties. It never mounts, creates or
 destroys anything.
@@ -138,6 +168,7 @@ key is commented. The ones most often changed:
 | `extraArgs` | `[]` | e.g. `--collector.dataset-snapshot`, `--pool=rpool` |
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
 | `devZfsHostPath` | `/dev/zfs` | |
+| `zfsUserlandVersion` | `""` | override branch detection, e.g. `"2.4"` |
 
 ## Alerting
 

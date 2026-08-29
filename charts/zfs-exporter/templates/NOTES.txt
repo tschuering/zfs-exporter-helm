@@ -14,6 +14,10 @@ than crashing:
 A healthy scrape has zfs_scrape_collector_success{collector="pool"} 1. Alert on
 it: the exporter answers 200 whether or not it could read anything.
 
+If a node's OpenZFS branch is not one the image carries, the logs say so by
+name ("zfs-shim: no bundled OpenZFS userland for host version ..."). Set
+zfsUserlandVersion to override the detection.
+
 {{- if not .Values.serviceMonitor.enabled }}
 
 No ServiceMonitor was created. Set serviceMonitor.enabled=true with the

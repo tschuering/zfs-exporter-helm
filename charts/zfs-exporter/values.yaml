@@ -82,6 +82,17 @@ dnsPolicy: ClusterFirst
 # Mounted from the host; there is no in-cluster substitute for it.
 devZfsHostPath: /dev/zfs
 
+# The image bundles an OpenZFS userland for each supported branch and picks
+# the one matching the node at run time, by reading /sys/module/zfs/version --
+# which needs no mount, since module state is not namespaced. Nodes on
+# different branches are handled by the same DaemonSet, and upgrading a node
+# across branches needs no change here.
+#
+# Set this only to override that detection, e.g. "2.4" to force a branch on a
+# node where /sys is not where the shim expects it. Wrong values produce a
+# clear startup error naming what the image carries.
+zfsUserlandVersion: ""
+
 # ---------------------------------------------------------------------------
 # Exporter
 # ---------------------------------------------------------------------------

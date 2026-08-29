@@ -17,6 +17,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # OpenZFS branches the image bundles a userland for. Keep in step with the
+  # builder stages in the Dockerfile.
+  ZFS_TREES: "2.3 2.4"
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -40,6 +45,29 @@ jobs:
         run: |
           pipx install yamllint
           yamllint --strict .
+
+  shim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l ./cmd)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::gofmt needed: ${unformatted}"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: CGO_ENABLED=0 go build ./...
 
   chart:
     runs-on: ubuntu-latest
@@ -124,29 +152,50 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Proves the three things the Dockerfile is actually responsible for:
-      # the exporter runs, zpool and zfs resolve on PATH with their shared
-      # libraries, and /metrics serves. Reading a real pool needs a host
-      # kernel module, which no runner has -- so zpool is expected to fail
-      # with "modules cannot be auto-loaded", and that failure IS the proof
-      # that the binary and its libraries are present and executable.
+      # Proves what the Dockerfile is actually responsible for: the exporter
+      # runs, the shim picks a bundled userland and starts it through that
+      # tree's own loader, and /metrics serves.
+      #
+      # No runner has a ZFS kernel module, so a real pool cannot be read here.
+      # ZFS_USERLAND_VERSION stands in for /sys/module/zfs/version, which is
+      # what lets both trees be exercised: reaching "modules cannot be
+      # auto-loaded" means that tree's zpool and every library it needs are
+      # present and executable, which is the part this image owns.
       - name: smoke test
         run: |
           set -euo pipefail
 
           docker run --rm zfs-exporter:ci --version
 
-          for bin in /usr/sbin/zpool /usr/sbin/zfs; do
-            out="$(docker run --rm --entrypoint "${bin}" zfs-exporter:ci version 2>&1 || true)"
-            case "${out}" in
-              *"cannot be auto-loaded"*|*"ZFS Module"*)
-                echo "ok: ${bin} runs and links" ;;
-              *"No such file"*|*"error while loading shared libraries"*)
-                echo "::error::${bin} is missing or unlinked: ${out}"; exit 1 ;;
-              *)
-                echo "unexpected but non-fatal from ${bin}: ${out}" ;;
-            esac
+          for tree in ${ZFS_TREES}; do
+            for bin in zpool zfs; do
+              out="$(docker run --rm --entrypoint "${bin}" \
+                       -e "ZFS_USERLAND_VERSION=${tree}" \
+                       zfs-exporter:ci version 2>&1 || true)"
+              case "${out}" in
+                *"cannot be auto-loaded"*|*"ZFS Module"*|zfs-${tree}*)
+                  echo "ok: ${tree} ${bin} runs and links" ;;
+                *"no bundled OpenZFS userland"*)
+                  echo "::error::${tree} is not in the image: ${out}"; exit 1 ;;
+                *"error while loading shared libraries"*|*"No such file"*)
+                  echo "::error::${tree} ${bin} is unlinked: ${out}"; exit 1 ;;
+                *)
+                  echo "::error::unexpected from ${tree} ${bin}: ${out}"; exit 1 ;;
+              esac
+            done
           done
+
+          # A host branch the image does not carry has to say so plainly
+          # rather than fail somewhere further in.
+          out="$(docker run --rm --entrypoint zpool \
+                   -e ZFS_USERLAND_VERSION=9.9 zfs-exporter:ci version 2>&1 || true)"
+          case "${out}" in
+            *"no bundled OpenZFS userland for host version 9.9"*)
+              echo "ok: unsupported host branch reports legibly" ;;
+            *)
+              echo "::error::unhelpful message for an unsupported branch: ${out}"
+              exit 1 ;;
+          esac
 
           docker run -d --name smoke -p 9134:9134 zfs-exporter:ci
           for _ in $(seq 1 30); do

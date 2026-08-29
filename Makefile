@@ -4,6 +4,8 @@ IMAGE ?= zfs-exporter
 TAG   ?= dev
 PLATFORM ?= linux/$(shell uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 CHART := charts/zfs-exporter
+# OpenZFS branches the image bundles, matching the Dockerfile builder stages
+ZFS_TREES ?= 2.3 2.4
 
 .PHONY: help build smoke lint chart scan clean
 
@@ -25,7 +27,14 @@ smoke: build ## Run the image and scrape it
 	done; \
 	docker rm -f zfs-exporter-smoke >/dev/null; \
 	grep -q '^zfs_exporter_build_info' /tmp/zfs-metrics; \
-	echo "ok: $$(wc -l < /tmp/zfs-metrics) metric lines"
+	echo "ok: $$(wc -l < /tmp/zfs-metrics) metric lines"; \
+	for tree in $(ZFS_TREES); do \
+		docker run --rm --platform $(PLATFORM) --entrypoint zpool \
+			-e ZFS_USERLAND_VERSION=$$tree $(IMAGE):$(TAG) version 2>&1 \
+			| grep -qE 'auto-loaded|ZFS Module|zfs-'"$$tree" \
+			&& echo "ok: $$tree userland runs" \
+			|| { echo "FAIL: $$tree userland"; exit 1; }; \
+	done
 
 lint: ## hadolint, shellcheck, yamllint
 	hadolint Dockerfile

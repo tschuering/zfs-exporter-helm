@@ -3,40 +3,93 @@
 # zfs_exporter shells out to zpool(8) and zfs(8) -- it does not read
 # /proc/spl/kstat the way node_exporter's ZFS collector does. So the image has
 # to carry the OpenZFS userland, and that userland talks to the host's kernel
-# module over /dev/zfs ioctls. Userland and module must therefore agree on a
-# major version: Debian trixie ships OpenZFS 2.3.x, which is what this image
-# is built against. Running it against a 2.2 or 2.4 host module is unsupported.
+# module over /dev/zfs ioctls.
 #
-# Everything else is kept out. The final stage is distroless -- no shell, no
-# package manager, no apt state -- and receives exactly three things: the two
-# ZFS binaries, the shared libraries ldd says they need, and the exporter.
+# Rather than pick one version and require the host to match, the image bundles
+# both currently supported OpenZFS branches and chooses between them at run
+# time. cmd/zfs-shim reads /sys/module/zfs/version -- readable in a container
+# with no mount, since module state is not namespaced -- and executes the
+# matching tree. A host running either 2.3.x or 2.4.x is served by the same
+# tag, and upgrading the host across branches needs no change here.
+#
+# Each tree is self-contained: its own zpool, zfs, libraries and dynamic
+# loader, under /opt/zfs/<major>.<minor>. That is what lets two userlands built
+# against different glibc versions live in one image -- neither is installed at
+# a standard path, and the shim starts each through its own loader.
+#
+# The final stage is distroless: no shell, no package manager, no apt state.
 
-ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+ARG DEBIAN_23_IMAGE=debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
+ARG DEBIAN_24_IMAGE=debian:forky-slim@sha256:91b0aaebf7a1ccacfe7a9cbff6ab2d6be7d9b3b6cf1dfcf44b25f9095c0e0464
+ARG GO_IMAGE=golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef36c5e63fae17570ce18f580af933dbd73
 ARG RUNTIME_IMAGE=gcr.io/distroless/base-debian13@sha256:9ef50bca108839d5986e4d84b7f7b2d79024c9293b7c35b162c6c55485bd5868
 
-# ---- OpenZFS userland, reduced to what the two binaries actually load -------
-FROM ${DEBIAN_IMAGE} AS zfs
-
+# ---- OpenZFS 2.3.x userland (Debian trixie) --------------------------------
+FROM ${DEBIAN_23_IMAGE} AS zfs23
+ARG ZFS_23_EXPECT=2.3
+COPY hack/collect-runtime-deps.sh /usr/local/bin/collect-runtime-deps.sh
 # OpenZFS sits in contrib, not main -- Debian keeps it out of main over the
 # CDDL/GPL incompatibility, and the slim image enables only main.
 #
 # DL3008: the package version is deliberately not pinned. What fixes the
-# OpenZFS major version here is the digest-pinned base image; pinning
-# zfsutils-linux on top of it would only make the build fail the moment
-# Debian ships a security update, since the archive drops superseded versions.
+# OpenZFS branch here is the digest-pinned base image, and the assertion below
+# fails the build if that base ever moves to a different branch. Pinning the
+# package on top would only break the moment Debian ships a security update,
+# since the archive drops superseded versions.
 # hadolint ignore=DL3008
 RUN set -eu; \
     sed -i 's/^Components:.*/Components: main contrib/' \
         /etc/apt/sources.list.d/debian.sources; \
     apt-get update; \
     apt-get install -y --no-install-recommends zfsutils-linux; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/*; \
+    version="$(dpkg-query -W -f='${Version}' zfsutils-linux)"; \
+    branch="${version%%-*}"; \
+    branch="${branch%.*}"; \
+    test "${branch}" = "${ZFS_23_EXPECT}" || { \
+        echo "expected OpenZFS ${ZFS_23_EXPECT} from this base, got ${version}" >&2; \
+        exit 1; \
+    }; \
+    /usr/local/bin/collect-runtime-deps.sh "/rootfs/opt/zfs/${branch}" \
+        /usr/sbin/zpool /usr/sbin/zfs
 
+# ---- OpenZFS 2.4.x userland (Debian forky) ---------------------------------
+FROM ${DEBIAN_24_IMAGE} AS zfs24
+ARG ZFS_24_EXPECT=2.4
 COPY hack/collect-runtime-deps.sh /usr/local/bin/collect-runtime-deps.sh
-RUN /usr/local/bin/collect-runtime-deps.sh /rootfs /usr/sbin/zpool /usr/sbin/zfs
+# hadolint ignore=DL3008
+RUN set -eu; \
+    sed -i 's/^Components:.*/Components: main contrib/' \
+        /etc/apt/sources.list.d/debian.sources; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends zfsutils-linux; \
+    rm -rf /var/lib/apt/lists/*; \
+    version="$(dpkg-query -W -f='${Version}' zfsutils-linux)"; \
+    branch="${version%%-*}"; \
+    branch="${branch%.*}"; \
+    test "${branch}" = "${ZFS_24_EXPECT}" || { \
+        echo "expected OpenZFS ${ZFS_24_EXPECT} from this base, got ${version}" >&2; \
+        exit 1; \
+    }; \
+    /usr/local/bin/collect-runtime-deps.sh "/rootfs/opt/zfs/${branch}" \
+        /usr/sbin/zpool /usr/sbin/zfs
+
+# ---- The dispatcher --------------------------------------------------------
+FROM ${GO_IMAGE} AS shim
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+# Static, so it does not care which glibc happens to be around, and stripped
+# because it is 150 lines of dispatch with nothing to debug in production.
+# The symlinks are made here: the final stage has no shell to make them in.
+RUN set -eu; \
+    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+        -o /out/usr/local/bin/zfs-shim ./cmd/zfs-shim; \
+    ln -s zfs-shim /out/usr/local/bin/zpool; \
+    ln -s zfs-shim /out/usr/local/bin/zfs
 
 # ---- Upstream release, verified against the digests pinned in this repo -----
-FROM ${DEBIAN_IMAGE} AS fetch
+FROM ${DEBIAN_23_IMAGE} AS fetch
 
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=pdf/zfs_exporter extractVersion=^v(?<version>.+)$
@@ -75,12 +128,15 @@ RUN set -eu; \
 # ---- Runtime ---------------------------------------------------------------
 FROM ${RUNTIME_IMAGE}
 
-COPY --from=zfs /rootfs/ /
+COPY --from=zfs23 /rootfs/ /
+COPY --from=zfs24 /rootfs/ /
+COPY --from=shim /out/ /
 COPY --from=fetch /out/zfs_exporter /usr/local/bin/zfs_exporter
 
 # zfs_exporter calls exec.Command("zpool", ...) and exec.Command("zfs", ...),
-# so both have to resolve on PATH. distroless does not put /usr/sbin on it.
-ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+# so both have to resolve on PATH -- to the shim, which is why /usr/local/bin
+# comes first.
+ENV PATH=/usr/local/bin:/usr/bin:/bin
 
 # Root, and no capabilities beyond it: /dev/zfs is mode 0600 root:root, so the
 # ioctls need DAC ownership rather than any capability. The chart drops the
