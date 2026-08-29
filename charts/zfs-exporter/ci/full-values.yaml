@@ -1,0 +1,33 @@
+---
+# Every optional object switched on, so CI renders the templates that the
+# default install skips.
+image:
+  registry: ghcr.io
+  repository: example/zfs-exporter
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+
+prometheusAnnotations:
+  enabled: true
+
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+
+nodeSelector:
+  node-role.kubernetes.io/storage: "true"
+
+priorityClassName: system-node-critical
+
+extraArgs:
+  - --collector.dataset-snapshot
+
+commonLabels:
+  example.com/owner: platform

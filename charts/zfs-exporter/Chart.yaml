@@ -1,0 +1,31 @@
+---
+apiVersion: v2
+name: zfs-exporter
+description: Prometheus exporter for per-dataset and per-pool OpenZFS metrics
+type: application
+
+# The chart's own version. Independent of appVersion -- a chart-only change
+# (new value, fixed template) bumps this and leaves appVersion alone.
+version: 0.1.0
+
+# Upstream zfs_exporter release the default image is built from.
+# hack/update-upstream.sh moves this with the Dockerfile pin.
+appVersion: "2.4.1"
+
+home: https://github.com/pdf/zfs_exporter
+sources:
+  - https://github.com/pdf/zfs_exporter
+keywords:
+  - zfs
+  - openzfs
+  - prometheus
+  - monitoring
+  - exporter
+
+# The exporter runs zpool(8)/zfs(8) against the node's kernel module, so it
+# only makes sense on nodes that have one. Nothing here needs a recent API.
+kubeVersion: ">=1.19.0-0"
+
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/operator: "false"

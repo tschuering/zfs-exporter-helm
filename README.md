@@ -1,0 +1,189 @@
+# zfs-exporter
+
+A container image and Helm chart for [pdf/zfs_exporter][upstream] — per-dataset
+and per-pool OpenZFS metrics for Prometheus.
+
+Upstream publishes release binaries but no image and no chart. This repository
+packages them: a distroless image carrying only the exporter and the OpenZFS
+userland it shells out to, and a DaemonSet chart that gives it the one piece of
+host access it needs.
+
+[upstream]: https://github.com/pdf/zfs_exporter
+
+## Why an image is not trivial
+
+`zfs_exporter` does not read `/proc/spl/kstat` the way node_exporter's ZFS
+collector does. It runs `zpool(8)` and `zfs(8)` and parses their output:
+
+```go
+exec.Command(`zpool`, `get`, `-Hpo`, `name,property,value`, ...)
+exec.Command(`zfs`,   `get`, `-Hprt`, ...)
+```
+
+So the image has to carry the OpenZFS userland, and that userland talks to the
+**host's** kernel module through `/dev/zfs`. The two must agree on a major
+version.
+
+This image is built against **OpenZFS 2.3.x**, from Debian trixie's
+`zfsutils-linux`. Running it against a host on 2.2 or 2.4 is unsupported and
+will fail at the ioctl, not at start-up.
+
+## What is in the image
+
+Three things, on `gcr.io/distroless/base-debian13` — no shell, no package
+manager, no apt state:
+
+| Path | Source |
+| --- | --- |
+| `/usr/local/bin/zfs_exporter` | upstream release, sha256 pinned in `checksums.txt` |
+| `/usr/sbin/zpool`, `/usr/sbin/zfs` | Debian trixie `zfsutils-linux` |
+| shared libraries | whatever `ldd` resolves for those two binaries |
+
+Around 58 MB. Both `linux/amd64` and `linux/arm64`.
+
+The exporter binary is verified against digests kept in this repository rather
+than the `sha256sums.txt` served next to the release. A sums file in the same
+directory as the artifact shares its trust root — anyone able to replace one
+can replace the other — so pinning it here is what makes the digest reviewable
+in a diff. `hack/update-upstream.sh` regenerates both by downloading and
+hashing each archive.
+
+## Security posture
+
+The pod runs as root, and that is the entire privilege it holds. `/dev/zfs` is
+mode `0600 root:root`, so the ioctls behind `zpool list` need DAC ownership —
+not a capability, not `privileged: true`.
+
+Everything else is off:
+
+- every capability dropped (`capabilities.drop: [ALL]`)
+- `allowPrivilegeEscalation: false`, `privileged: false`
+- `readOnlyRootFilesystem: true`
+- `hostNetwork: false`, `hostPID: false`
+- no service account token (`automountServiceAccountToken: false`) — the
+  exporter never talks to the Kubernetes API
+- one host mount: the `/dev/zfs` character device
+
+The exporter reads pool and dataset properties. It never mounts, creates or
+destroys anything.
+
+### Scanner findings
+
+A scan of the image reports nothing in the OS layer and a set of Go advisories
+in the exporter binary itself, which is upstream's release built with an older
+toolchain. Those are accepted, not fixed: rebuilding from source to clear them
+would make this something other than a packaging of the upstream release. CI
+blocks on the OS layer and reports the rest to the Security tab. See
+[SECURITY.md](SECURITY.md).
+
+Releases are signed with [cosign][] keyless, and carry an SPDX SBOM and build
+provenance as attestations:
+
+```console
+$ cosign verify ghcr.io/OWNER/zfs-exporter:0.1.0 \
+    --certificate-identity-regexp '^https://github.com/OWNER/zfs-exporter/' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+[cosign]: https://docs.sigstore.dev/cosign/overview/
+
+## Install
+
+```console
+$ helm install zfs-exporter oci://ghcr.io/OWNER/charts/zfs-exporter \
+    --namespace monitoring \
+    --create-namespace
+```
+
+On a cluster where only some nodes have ZFS, constrain it — otherwise the pods
+on the others sit there reporting failures:
+
+```yaml
+nodeSelector:
+  node-role.kubernetes.io/storage: "true"
+```
+
+### Scraping
+
+Two options, neither on by default:
+
+```yaml
+# Prometheus Operator
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus
+```
+
+```yaml
+# Agents that discover by pod annotation (Grafana Alloy, the
+# prometheus.io/scrape convention)
+prometheusAnnotations:
+  enabled: true
+```
+
+The Service is headless on purpose. A DaemonSet's metrics differ per node, so a
+load-balanced ClusterIP would report a different node's pools on every scrape.
+Endpoint discovery reads every pod address instead.
+
+### Values
+
+See [`charts/zfs-exporter/values.yaml`](charts/zfs-exporter/values.yaml); every
+key is commented. The ones most often changed:
+
+| Key | Default | |
+| --- | --- | --- |
+| `image.digest` | `""` | pin here for reproducible rollouts; wins over `tag` |
+| `nodeSelector` | `{}` | restrict to nodes that have ZFS |
+| `extraArgs` | `[]` | e.g. `--collector.dataset-snapshot`, `--pool=rpool` |
+| `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
+| `devZfsHostPath` | `/dev/zfs` | |
+
+## Alerting
+
+The exporter answers `200` whether or not it could read anything, so a
+successful scrape is not a working exporter. Alert on the collector instead:
+
+```yaml
+- alert: ZFSExporterCollectorFailing
+  expr: zfs_scrape_collector_success{collector="pool"} == 0
+  for: 15m
+```
+
+A node without the ZFS module keeps the pod `Running` and every collector at
+`0` — deliberately, so it alerts rather than crash-looping.
+
+## Development
+
+```console
+$ make build     # build for the host architecture
+$ make smoke     # run it and scrape /metrics
+$ make lint      # hadolint, shellcheck, yamllint
+$ make chart     # helm lint, render, kubeconform
+$ make scan      # trivy, failing on HIGH and CRITICAL
+```
+
+Moving to a new upstream release:
+
+```console
+$ hack/update-upstream.sh 2.4.2
+```
+
+That downloads each architecture's archive, hashes it locally, and rewrites
+`checksums.txt`, the Dockerfile `ARG` and the chart's `appVersion`. Review the
+digests against upstream before merging. Renovate can raise the version bump
+but cannot compute the digests, so a bump that skips this script fails the
+build rather than shipping something unverified.
+
+## Licensing
+
+This packaging is MIT (see [LICENSE](LICENSE)).
+
+It builds an image containing software under other licences:
+
+- `zfs_exporter` — MIT, © the upstream authors
+- OpenZFS userland (`zpool`, `zfs`, `libzfs`) — CDDL-1.0
+- glibc and the Debian base — LGPL-2.1-or-later and others
+
+The image redistributes CDDL-licensed binaries. The corresponding source is
+Debian trixie's `zfs-linux` package.

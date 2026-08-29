@@ -1,0 +1,167 @@
+---
+# Default values for zfs-exporter.
+
+image:
+  registry: ghcr.io
+  repository: OWNER/zfs-exporter
+  # Defaults to the chart's appVersion. Set `digest` instead to pin
+  # reproducibly -- if both are set the digest wins and the tag is ignored.
+  tag: ""
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+commonLabels: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# The exporter never talks to the Kubernetes API -- it reads the node's ZFS
+# state and serves it. A projected token would be a credential in a pod that
+# has no use for one.
+automountServiceAccountToken: false
+
+# ---------------------------------------------------------------------------
+# Scheduling
+#
+# The chart ships no nodeSelector: a DaemonSet on a cluster where only some
+# nodes have ZFS should be constrained explicitly, e.g.
+#   nodeSelector:
+#     feature.node.kubernetes.io/storage-zfs: "true"
+# On a node without the ZFS module the pod stays Running and every scrape
+# reports zfs_scrape_collector_success 0, which alerts rather than crashloops.
+# ---------------------------------------------------------------------------
+nodeSelector: {}
+affinity: {}
+
+# Node-level telemetry is worth keeping on nodes that are cordoned, tainted or
+# under pressure -- those are the nodes you most want pool metrics from.
+tolerations:
+  - operator: Exists
+
+priorityClassName: ""
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# ---------------------------------------------------------------------------
+# Security
+#
+# Root is required, not incidental: /dev/zfs is mode 0600 root:root, so the
+# ioctls behind `zpool list` need DAC ownership. That is the whole privilege
+# the pod holds -- every capability is dropped, the rootfs is read-only,
+# privilege escalation is off and the host's namespaces are not shared. The
+# exporter reads pool and dataset properties; it never mounts, creates or
+# destroys anything.
+# ---------------------------------------------------------------------------
+podSecurityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  privileged: false
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+hostNetwork: false
+hostPID: false
+dnsPolicy: ClusterFirst
+
+# Character device the OpenZFS userland talks to the kernel module through.
+# Mounted from the host; there is no in-cluster substitute for it.
+devZfsHostPath: /dev/zfs
+
+# ---------------------------------------------------------------------------
+# Exporter
+# ---------------------------------------------------------------------------
+listenPort: 9134
+
+# Flags appended to the container command, e.g.
+#   extraArgs:
+#     - --collector.dataset-snapshot
+#     - --pool=rpool
+extraArgs: []
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+# Modest by design: the work is forking zpool/zfs and parsing their output.
+# The limit is what keeps a pathological `zfs get` on a pool with very many
+# datasets from competing with the workloads being measured.
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
+# "/" is the exporter-toolkit landing page and the only endpoint that answers
+# outside /metrics -- there is no /-/healthy on this exporter.
+livenessProbe:
+  httpGet:
+    path: /
+    port: metrics
+  initialDelaySeconds: 5
+  periodSeconds: 30
+  timeoutSeconds: 5
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: metrics
+  initialDelaySeconds: 5
+  periodSeconds: 30
+  timeoutSeconds: 5
+
+terminationGracePeriodSeconds: 30
+
+podAnnotations: {}
+podLabels: {}
+
+# ---------------------------------------------------------------------------
+# Service and scraping
+# ---------------------------------------------------------------------------
+service:
+  enabled: true
+  type: ClusterIP
+  port: 9134
+  annotations: {}
+  labels: {}
+
+# For Prometheus Operator. Off by default: the CRD may not exist, and helm
+# would fail the install rather than skip the object.
+serviceMonitor:
+  enabled: false
+  # Defaults to the release namespace.
+  namespace: ""
+  interval: 60s
+  scrapeTimeout: 30s
+  labels: {}
+  annotations: {}
+  relabelings: []
+  metricRelabelings: []
+  # A DaemonSet's metrics are per node, so carry the node name onto them.
+  honorLabels: false
+
+# Alternative to a ServiceMonitor for agents that discover by annotation
+# (Alloy, the Prometheus kubernetes_sd annotation convention).
+prometheusAnnotations:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+  # Selectors for whatever scrapes this, e.g. the Prometheus or Alloy pod.
+  # Empty means "any pod in any namespace", which is rarely what you want.
+  ingressFrom: []

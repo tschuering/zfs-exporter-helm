@@ -1,0 +1,4 @@
+*
+!Dockerfile
+!checksums.txt
+!hack/collect-runtime-deps.sh

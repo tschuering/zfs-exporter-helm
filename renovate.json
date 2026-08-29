@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "packageRules": [
+    {
+      "description": "Base images are pinned by digest in the Dockerfile ARGs",
+      "matchManagers": ["dockerfile"],
+      "pinDigests": true
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "The upstream zfs_exporter release. Renovate can move the version, but not the per-architecture digests in checksums.txt -- run hack/update-upstream.sh to regenerate those, or the build fails closed on a checksum mismatch rather than installing something unreviewed",
+      "customType": "regex",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z0-9-.]+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n\\s*ARG ZFS_EXPORTER_VERSION=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "description": "kubeconform pinned in the CI workflow",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
+      "matchStrings": [
+        "yannh/kubeconform/releases/download/v(?<currentValue>[0-9.]+)/"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "yannh/kubeconform",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ]
+}

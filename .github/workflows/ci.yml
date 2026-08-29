@@ -1,0 +1,208 @@
+---
+# Everything that has to hold before a change lands. Nothing here publishes;
+# release.yml is the only workflow that pushes anything.
+#
+# Actions are pinned to commit SHAs rather than tags: a tag is mutable and a
+# compromised action runs with this workflow's token. Renovate keeps the
+# comments and the SHAs moving together.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default; jobs that need more say so themselves.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+      - name: shellcheck
+        run: shellcheck hack/*.sh
+
+      - name: yamllint
+        run: |
+          pipx install yamllint
+          yamllint --strict .
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: helm lint
+        run: helm lint charts/zfs-exporter --strict
+
+      # Rendering with the defaults only exercises the objects a default
+      # install creates. ci/full-values.yaml turns on everything optional, so
+      # the ServiceMonitor and NetworkPolicy templates are covered too.
+      - name: render and schema-check
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+          # CRD schemas for kinds the chart renders that are not core k8s
+          crds='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main'
+          crds="${crds}/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+          for values in charts/zfs-exporter/ci/*.yaml; do
+            echo "::group::${values}"
+            helm template ci charts/zfs-exporter \
+              --namespace monitoring \
+              --values "${values}" > "/tmp/$(basename "${values}").rendered"
+            kubeconform -strict -summary \
+              -schema-location default \
+              -schema-location "${crds}" \
+              "/tmp/$(basename "${values}").rendered"
+            echo "::endgroup::"
+          done
+
+      # The chart version has to move whenever the chart does, or a consumer
+      # pinning a version silently gets different templates.
+      - name: chart version bumped
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          if git diff --quiet "origin/${{ github.base_ref }}" -- charts/; then
+            echo "chart untouched, nothing to check"
+            exit 0
+          fi
+          chart=charts/zfs-exporter/Chart.yaml
+          base="origin/${{ github.base_ref }}"
+          before="$(git show "${base}:${chart}" | awk '/^version:/ { print $2 }')"
+          after="$(awk '/^version:/ { print $2 }' "${chart}")"
+          if [ "${before}" = "${after}" ]; then
+            echo "::error::charts/ changed but Chart.yaml version is ${after}"
+            exit 1
+          fi
+          echo "chart version ${before} -> ${after}"
+
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Only for the SARIF upload below.
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      # Built for the host arch and loaded locally so the smoke test runs
+      # natively -- the exporter forks zpool(8), and forking under QEMU
+      # user-mode emulation segfaults for reasons that have nothing to do
+      # with this image.
+      - name: build (amd64, loaded)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: zfs-exporter:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Proves the three things the Dockerfile is actually responsible for:
+      # the exporter runs, zpool and zfs resolve on PATH with their shared
+      # libraries, and /metrics serves. Reading a real pool needs a host
+      # kernel module, which no runner has -- so zpool is expected to fail
+      # with "modules cannot be auto-loaded", and that failure IS the proof
+      # that the binary and its libraries are present and executable.
+      - name: smoke test
+        run: |
+          set -euo pipefail
+
+          docker run --rm zfs-exporter:ci --version
+
+          for bin in /usr/sbin/zpool /usr/sbin/zfs; do
+            out="$(docker run --rm --entrypoint "${bin}" zfs-exporter:ci version 2>&1 || true)"
+            case "${out}" in
+              *"cannot be auto-loaded"*|*"ZFS Module"*)
+                echo "ok: ${bin} runs and links" ;;
+              *"No such file"*|*"error while loading shared libraries"*)
+                echo "::error::${bin} is missing or unlinked: ${out}"; exit 1 ;;
+              *)
+                echo "unexpected but non-fatal from ${bin}: ${out}" ;;
+            esac
+          done
+
+          docker run -d --name smoke -p 9134:9134 zfs-exporter:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9134/metrics -o /tmp/metrics; then break; fi
+            sleep 1
+          done
+          docker rm -f smoke >/dev/null
+
+          grep -q '^zfs_exporter_build_info' /tmp/metrics
+          grep -q '^zfs_scrape_collector_success' /tmp/metrics
+          echo "ok: /metrics served $(wc -l < /tmp/metrics) lines"
+
+      - name: build (arm64, no push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/arm64
+          push: false
+          cache-from: type=gha
+
+      # Split deliberately.
+      #
+      # The OS layer is ours: what goes into it is decided by the base image
+      # digest and the two packages installed on top, so a HIGH there is a
+      # thing this repository can fix, and it blocks.
+      #
+      # The exporter binary is not ours. Upstream ships prebuilt release
+      # binaries and this image is a packaging of exactly those bytes -- that
+      # provenance is the point, and rebuilding from source to clear findings
+      # would throw it away. Upstream currently builds with an older Go
+      # toolchain, so the binary carries stdlib and x/* advisories that no
+      # change here can address. Those are reported to the Security tab and
+      # tracked as accepted risk (see SECURITY.md) rather than turning the
+      # pipeline permanently red.
+      - name: trivy (os packages, blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: zfs-exporter:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os
+          severity: HIGH,CRITICAL
+
+      - name: trivy (everything, reported)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: zfs-exporter:ci
+          format: sarif
+          output: trivy.sarif
+          exit-code: "0"
+          ignore-unfixed: true
+          severity: MEDIUM,HIGH,CRITICAL
+
+      - name: upload to the security tab
+        uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # codeql-bundle-v2.26.4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image

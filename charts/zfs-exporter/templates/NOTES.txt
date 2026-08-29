@@ -1,0 +1,29 @@
+{{ include "zfs-exporter.fullname" . }} is rolling out as a DaemonSet in namespace {{ .Release.Namespace }}.
+
+Metrics:  http://{{ include "zfs-exporter.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/metrics
+
+Check that the nodes can actually reach their pools -- a pod whose node has no
+ZFS kernel module stays Running and reports every collector as failed rather
+than crashing:
+
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/name={{ include "zfs-exporter.name" . }} --tail=20
+
+  kubectl -n {{ .Release.Namespace }} exec ds/{{ include "zfs-exporter.fullname" . }} -- \
+    /usr/local/bin/zfs_exporter --version
+
+A healthy scrape has zfs_scrape_collector_success{collector="pool"} 1. Alert on
+it: the exporter answers 200 whether or not it could read anything.
+
+{{- if not .Values.serviceMonitor.enabled }}
+
+No ServiceMonitor was created. Set serviceMonitor.enabled=true with the
+Prometheus Operator, or prometheusAnnotations.enabled=true for agents that
+discover by pod annotation.
+{{- end }}
+
+{{- if .Values.image.digest }}
+{{- else }}
+
+The image is pinned by tag, not digest. Set image.digest for a reproducible
+rollout.
+{{- end }}

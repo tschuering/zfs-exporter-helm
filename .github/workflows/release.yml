@@ -1,0 +1,147 @@
+---
+# The only workflow that publishes. Triggered by a tag, which is the record of
+# what was released -- nothing here derives a version from a branch.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Produces, for that tag:
+#   * a multi-arch image on ghcr.io, built from the pinned upstream release
+#   * an SBOM, attached to the image as an attestation
+#   * a cosign signature, keyless, tied to this workflow's identity
+#   * the Helm chart, pushed as an OCI artifact and signed the same way
+#
+# Consumers can verify all of it without holding a key:
+#
+#   cosign verify ghcr.io/OWNER/zfs-exporter:0.1.0 \
+#     --certificate-identity-regexp '^https://github.com/OWNER/zfs-exporter/' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Push to GHCR, and let cosign mint a short-lived OIDC identity instead
+      # of this repo holding a signing key.
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Build provenance, so the image records how it was made.
+          provenance: mode=max
+          sbom: true
+
+      # Signed by digest, not tag: a tag can be moved onto other bytes after
+      # the signature is made, and then the signature no longer says anything
+      # about what a consumer pulls.
+      - name: sign
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: sbom
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.REGISTRY }}/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: attest sbom
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}
+        run: |
+          cosign attest --yes \
+            --predicate sbom.spdx.json \
+            --type spdxjson \
+            "${IMAGE}@${DIGEST}"
+
+  chart:
+    runs-on: ubuntu-latest
+    needs: image
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: package and push
+        id: push
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          echo "${TOKEN}" | helm registry login "${REGISTRY}" \
+            --username "${ACTOR}" --password-stdin
+
+          helm package charts/zfs-exporter --destination /tmp/chart
+          package="$(ls /tmp/chart/*.tgz)"
+
+          # helm prints the pushed digest on stderr; capture it for cosign.
+          helm push "${package}" "oci://${REGISTRY}/${OWNER}/charts" 2> /tmp/push.log
+          cat /tmp/push.log
+          digest="$(awk '/Digest:/ { print $2 }' /tmp/push.log)"
+          version="$(basename "${package}" .tgz | sed 's/^zfs-exporter-//')"
+          echo "ref=${REGISTRY}/${OWNER}/charts/zfs-exporter@${digest}" >> "${GITHUB_OUTPUT}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: sign chart
+        run: cosign sign --yes "${{ steps.push.outputs.ref }}"

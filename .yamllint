@@ -1,0 +1,27 @@
+---
+
+# Lint config for this repo. Helm templates are not YAML until they are
+# rendered, so they are excluded here and covered by `helm lint` plus the
+# render-and-schema-check step in CI instead.
+
+extends: default
+
+ignore: |
+  charts/*/templates/
+
+rules:
+  line-length:
+    max: 120
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  # "on:" in a workflow file is a key, not a boolean
+  truthy:
+    check-keys: false
+  indentation:
+    spaces: 2
+    indent-sequences: true
+  document-start:
+    present: true
+  empty-lines:
+    max: 2

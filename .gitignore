@@ -1,0 +1,3 @@
+*.tgz
+/sbom.spdx.json
+.DS_Store
