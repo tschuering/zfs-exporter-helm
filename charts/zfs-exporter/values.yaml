@@ -15,24 +15,21 @@ nameOverride: ""
 fullnameOverride: ""
 commonLabels: {}
 
-# An account of its own, despite the exporter never calling the API. A pod
-# always runs as some service account -- leaving this out means "default", not
-# "none" -- and CIS Kubernetes 5.1.5 is precisely "default service accounts
-# should not be actively used". So this exists to satisfy that check, not to
-# hold any permission: the chart grants no RBAC at all.
+# The chart creates no ServiceAccount. It would hold no permissions -- there
+# is no RBAC here, and the exporter never calls the Kubernetes API -- so the
+# pod runs under the namespace's default account.
 #
-# Set create: false to run under the namespace's default account instead. The
-# token stays off either way.
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-
-# Applied to the pod, which is what decides whether a token is projected --
-# the identical field on a ServiceAccount is only a default, and the pod's
-# setting wins over it. Deliberately one setting rather than two: an exporter
-# that reads the node's ZFS state has no use for a Kubernetes credential.
+# Which makes this line the one that matters: default accounts project a token
+# unless told not to, and a credential in a pod with no use for one is just
+# something to steal. Turning it on is only useful if you add a sidecar that
+# does talk to the API.
+#
+# A cluster enforcing CIS Kubernetes 5.1.5 ("default service accounts should
+# not be actively used") or Kyverno's equivalent will reject a pod on the
+# default account, regardless of whether a token is mounted. Point
+# serviceAccountName at an account you create separately if you are on one.
 automountServiceAccountToken: false
+serviceAccountName: ""
 
 # ---------------------------------------------------------------------------
 # Scheduling

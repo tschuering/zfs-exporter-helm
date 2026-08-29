@@ -41,14 +41,6 @@ app.kubernetes.io/name: {{ include "zfs-exporter.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "zfs-exporter.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{- default (include "zfs-exporter.fullname" .) .Values.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
-{{- end -}}
-{{- end -}}
-
 {{/*
 Image reference. A digest wins over a tag: pinning by digest is what makes a
 rollout reproducible, and mixing both silently ignores the tag.

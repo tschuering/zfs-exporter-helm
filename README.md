@@ -114,7 +114,9 @@ Everything else is off:
 - `readOnlyRootFilesystem: true`
 - `hostNetwork: false`, `hostPID: false`
 - no service account token (`automountServiceAccountToken: false`) — the
-  exporter never talks to the Kubernetes API
+  exporter never talks to the Kubernetes API, so the chart creates no account
+  and grants no RBAC; the pod runs under the namespace default with its token
+  suppressed
 - one host mount: the `/dev/zfs` character device (the branch detection needs
   no mount — `/sys/module` is already visible)
 
@@ -193,6 +195,7 @@ key is commented. The ones most often changed:
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
 | `devZfsHostPath` | `/dev/zfs` | |
 | `zfsUserlandVersion` | `""` | override branch detection, e.g. `"2.4"` |
+| `serviceAccountName` | `""` | run under an account you created, if a policy forbids `default` |
 
 ## Alerting
 
