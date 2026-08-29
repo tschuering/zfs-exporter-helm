@@ -26,6 +26,10 @@ keywords:
 # only makes sense on nodes that have one. Nothing here needs a recent API.
 kubeVersion: ">=1.19.0-0"
 
+maintainers:
+  - name: Tobias Schüring
+    email: tobias@schuering.xyz
+
 annotations:
   artifacthub.io/license: MIT
   artifacthub.io/operator: "false"

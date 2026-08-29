@@ -6,6 +6,8 @@ Report vulnerabilities privately through GitHub's "Report a vulnerability"
 button on the Security tab. Please do not open a public issue for anything
 exploitable.
 
+If you cannot use that form, mail tobias@schuering.xyz instead.
+
 Include the image digest or chart version, what you observed, and how to
 reproduce it. Expect an acknowledgement within a week.
 
