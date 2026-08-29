@@ -29,9 +29,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- with .Values.serviceAccountName }}
-      serviceAccountName: {{ . }}
-      {{- end }}
+      serviceAccountName: {{ include "zfs-exporter.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
