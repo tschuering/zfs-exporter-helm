@@ -134,8 +134,8 @@ Releases are signed with [cosign][] keyless, and carry an SPDX SBOM and build
 provenance as attestations:
 
 ```console
-$ cosign verify ghcr.io/OWNER/zfs-exporter:0.1.0 \
-    --certificate-identity-regexp '^https://github.com/OWNER/zfs-exporter/' \
+$ cosign verify ghcr.io/tschuering/zfs-exporter:0.1.0 \
+    --certificate-identity-regexp '^https://github.com/tschuering/zfs-exporter-helm/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -144,7 +144,7 @@ $ cosign verify ghcr.io/OWNER/zfs-exporter:0.1.0 \
 ## Install
 
 ```console
-$ helm install zfs-exporter oci://ghcr.io/OWNER/charts/zfs-exporter \
+$ helm install zfs-exporter oci://ghcr.io/tschuering/charts/zfs-exporter \
     --namespace monitoring \
     --create-namespace
 ```

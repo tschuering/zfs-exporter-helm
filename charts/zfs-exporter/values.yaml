@@ -3,7 +3,7 @@
 
 image:
   registry: ghcr.io
-  repository: OWNER/zfs-exporter
+  repository: tschuering/zfs-exporter
   # Defaults to the chart's appVersion. Set `digest` instead to pin
   # reproducibly -- if both are set the digest wins and the tag is ignored.
   tag: ""

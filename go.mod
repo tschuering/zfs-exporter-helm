@@ -1,3 +1,3 @@
-module github.com/OWNER/zfs-exporter
+module github.com/tschuering/zfs-exporter-helm
 
 go 1.24

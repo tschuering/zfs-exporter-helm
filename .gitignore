@@ -1,3 +1,5 @@
 *.tgz
+# `go build ./...` drops the shim binary in the repo root
+/zfs-shim
 /sbom.spdx.json
 .DS_Store

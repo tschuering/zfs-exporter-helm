@@ -12,8 +12,8 @@
 #
 # Consumers can verify all of it without holding a key:
 #
-#   cosign verify ghcr.io/OWNER/zfs-exporter:0.1.0 \
-#     --certificate-identity-regexp '^https://github.com/OWNER/zfs-exporter/' \
+#   cosign verify ghcr.io/tschuering/zfs-exporter:0.1.0 \
+#     --certificate-identity-regexp '^https://github.com/tschuering/zfs-exporter-helm/' \
 #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 name: release
@@ -29,6 +29,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
+  # Not ${{ github.repository }}: this repo is named for the chart, but
+  # what people pull is an exporter. Change here and in the chart's
+  # image.repository together.
+  IMAGE_NAME: ${{ github.repository_owner }}/zfs-exporter
 
 jobs:
   image:
@@ -61,7 +65,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -86,20 +90,20 @@ jobs:
       - name: sign
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       - name: sbom
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          image: ${{ env.REGISTRY }}/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
 
       - name: attest sbom
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           cosign attest --yes \
             --predicate sbom.spdx.json \

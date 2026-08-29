@@ -12,8 +12,9 @@ version: 0.1.0
 # hack/update-upstream.sh moves this with the Dockerfile pin.
 appVersion: "2.4.1"
 
-home: https://github.com/pdf/zfs_exporter
+home: https://github.com/tschuering/zfs-exporter-helm
 sources:
+  - https://github.com/tschuering/zfs-exporter-helm
   - https://github.com/pdf/zfs_exporter
 keywords:
   - zfs
