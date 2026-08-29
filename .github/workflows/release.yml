@@ -61,6 +61,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The chart's image.tag defaults to its appVersion, which is the upstream
+      # exporter version -- so that tag has to exist, or a default install
+      # pulls something that was never published. Read from the Dockerfile so
+      # there is one source of truth for which release is packaged.
+      - name: upstream version
+        id: upstream
+        run: |
+          set -euo pipefail
+          version="$(awk -F= '/^ARG ZFS_EXPORTER_VERSION=/ { print $2 }' Dockerfile)"
+          test -n "${version}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "packaging zfs_exporter ${version}"
+
       - name: metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -69,6 +82,10 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # The packaged exporter version, which is what the chart asks for
+            # by default. Moves when a later packaging release rebuilds the
+            # same upstream version -- pin image.digest if that matters.
+            type=raw,value=${{ steps.upstream.outputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: build and push

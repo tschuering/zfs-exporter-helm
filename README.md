@@ -141,6 +141,19 @@ $ cosign verify ghcr.io/tschuering/zfs-exporter:0.1.0 \
 
 [cosign]: https://docs.sigstore.dev/cosign/overview/
 
+## Tags
+
+A release tagged `v0.1.0` publishes the image as:
+
+| Tag | Moves? |
+| --- | --- |
+| `0.1.0`, `0.1` | no — the packaging release |
+| `2.4.1` | yes — the packaged exporter version, re-pointed if a later packaging release rebuilds it |
+| `latest` | yes |
+
+The chart asks for the exporter version by default, since that is its
+`appVersion`. Set `image.digest` for a rollout that cannot move under you.
+
 ## Install
 
 ```console
