@@ -10,6 +10,30 @@ host access it needs.
 
 [upstream]: https://github.com/pdf/zfs_exporter
 
+## Motivation
+
+I wanted to run this exporter the way I already run node_exporter: as a
+DaemonSet, deployed from the same place as everything else, and to keep the
+Ubuntu host underneath as thin as I could.
+
+Everything else on my node had already moved into Kubernetes. The ZFS exporter
+was the one piece of monitoring still installed on the host — a binary in
+`/usr/local/bin`, a systemd unit, a version pin and a checksum, all carried by
+configuration management, all needing their own review and their own upgrade
+path. One exporter's worth of host state, kept alive for one exporter.
+
+That is a poor trade. A host that runs a kernel, ZFS and a kubelet is a host I
+can rebuild without thinking. Every package and unit added on top is something
+to patch, something that drifts, and something that has to be reproduced the
+next time the machine is reinstalled. Moving the exporter into the cluster puts
+it under the same deployment, rollback and upgrade story as every other
+workload, and takes the last service off the host.
+
+It stayed on the host longer than everything else for a concrete reason:
+upstream publishes no image and no chart, and unlike node_exporter this
+exporter needs the OpenZFS userland present next to it. That is the gap this
+repository fills.
+
 ## Why an image is not trivial
 
 `zfs_exporter` does not read `/proc/spl/kstat` the way node_exporter's ZFS
