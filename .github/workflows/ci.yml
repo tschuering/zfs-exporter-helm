@@ -129,8 +129,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Only for the SARIF upload below.
+      # Both are for the SARIF upload below. actions:read is what lets the
+      # uploader read the workflow run it is reporting against, and GitHub
+      # documents it as required for workflows in private repositories --
+      # without it the upload fails on GET /repos/{o}/{r}/actions/runs/{id}
+      # with "Resource not accessible by integration".
       security-events: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -250,8 +255,37 @@ jobs:
           ignore-unfixed: true
           severity: MEDIUM,HIGH,CRITICAL
 
+      # Public repositories ingest SARIF into code scanning for free. Private
+      # ones need GitHub Advanced Security, and without it the upload fails
+      # outright rather than being skipped -- so it would turn every run red
+      # for a reason that has nothing to do with the code. Skipped while
+      # private; starts working by itself once the repository is public.
+      #
+      # The scan above still runs either way, so nothing goes unexamined; the
+      # findings just live in the job log rather than the Security tab.
       - name: upload to the security tab
+        if: ${{ !github.event.repository.private }}
         uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # codeql-bundle-v2.26.4
         with:
           sarif_file: trivy.sarif
           category: trivy-image
+
+      - name: report findings in the log instead
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "Repository is private, so SARIF was not uploaded to code scanning."
+          echo "Findings from the scan above:"
+          python3 - <<'EOF'
+          import json
+          with open("trivy.sarif") as fh:
+              sarif = json.load(fh)
+          rules = {
+              r["id"]: r.get("shortDescription", {}).get("text", "")
+              for run in sarif.get("runs", [])
+              for r in run.get("tool", {}).get("driver", {}).get("rules", [])
+          }
+          results = [r for run in sarif.get("runs", []) for r in run.get("results", [])]
+          print(f"  {len(results)} result(s)")
+          for r in results[:40]:
+              print(f"  {r.get('ruleId')}: {rules.get(r.get('ruleId'), '')[:90]}")
+          EOF
