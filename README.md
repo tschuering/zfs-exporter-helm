@@ -153,6 +153,10 @@ A release tagged `v0.1.0` publishes:
 | image | `latest` | yes |
 | chart | `0.1.0` | no |
 
+Each tag also creates a GitHub release carrying the generated changelog, the
+packaged chart as a `.tgz`, and the SBOM as a file — for anyone who would
+rather not go through a registry client.
+
 There is deliberately **no `2.4.1` image tag**. That number is the exporter's,
 and it is the one thing that cannot distinguish two of our releases: packaging
 the same upstream version twice can still mean a different base image, a
