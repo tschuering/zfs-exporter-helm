@@ -252,6 +252,32 @@ The Service is headless on purpose. A DaemonSet's metrics differ per node, so a
 load-balanced ClusterIP would report a different node's pools on every scrape.
 Endpoint discovery reads every pod address instead.
 
+### Restricting who may scrape
+
+The metrics expose pool layout, dataset names and capacities, so the endpoint
+is worth treating as sensitive. The chart can ship a `NetworkPolicy`, **off by
+default**:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+```
+
+It is off by default for two reasons. A `NetworkPolicy` does nothing unless the
+cluster's CNI enforces them — several do not, and a policy that silently has no
+effect is worse than none, because it reads as protection. And on a cluster
+that *does* enforce them, a policy naming the wrong source is how you find out
+your scraper can no longer reach the exporter.
+
+Note what an empty `ingressFrom` means: the rendered policy allows the metrics
+port **from anywhere**, and denies every other port. That is a narrowing, not a
+restriction on who may connect. Set `ingressFrom` to whatever actually scrapes
+this — otherwise enabling it buys very little.
+
 ### Values
 
 See [`charts/zfs-exporter/values.yaml`](charts/zfs-exporter/values.yaml); every
@@ -262,6 +288,7 @@ key is commented. The ones most often changed:
 | `image.digest` | `""` | pin here for reproducible rollouts; wins over `tag` |
 | `extraArgs` | `[]` | e.g. `--collector.dataset-snapshot`, `--pool=rpool` |
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
+| `networkPolicy.enabled` | `false` | see [Restricting who may scrape](#restricting-who-may-scrape) |
 | `devicePlugin.resourceName` | `tschuering.github.io/dev-zfs` | change only on a collision |
 | `devicePlugin.kubeletPluginDir` | `/var/lib/kubelet/device-plugins` | if your kubelet root differs |
 | `zfsUserlandVersion` | `""` | override branch detection, e.g. `"2.4"` |

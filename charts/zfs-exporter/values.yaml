@@ -232,8 +232,13 @@ serviceMonitor:
 prometheusAnnotations:
   enabled: false
 
+# Off by default. A NetworkPolicy does nothing unless the cluster's CNI
+# enforces them, and one that silently has no effect is worse than none --
+# it reads as protection. On a cluster that does enforce them, a policy naming
+# the wrong source is how you discover your scraper can no longer reach this.
 networkPolicy:
   enabled: false
   # Selectors for whatever scrapes this, e.g. the Prometheus or Alloy pod.
-  # Empty means "any pod in any namespace", which is rarely what you want.
+  # Empty renders a policy that allows the metrics port from anywhere and
+  # denies every other port -- a narrowing, not a restriction on who connects.
   ingressFrom: []
