@@ -21,8 +21,11 @@ networkPolicy:
         matchLabels:
           kubernetes.io/metadata.name: monitoring
 
-nodeSelector:
-  node-role.kubernetes.io/storage: "true"
+devicePlugin:
+  resourceName: example.com/dev-zfs
+  kubeletPluginDir: /var/lib/k0s/kubelet/device-plugins
+  count: 2
+  priorityClassName: system-node-critical
 
 priorityClassName: system-node-critical
 

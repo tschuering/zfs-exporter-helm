@@ -77,14 +77,20 @@ RUN set -eu; \
 # ---- The dispatcher --------------------------------------------------------
 FROM ${GO_IMAGE} AS shim
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 COPY cmd ./cmd
-# Static, so it does not care which glibc happens to be around, and stripped
-# because it is 150 lines of dispatch with nothing to debug in production.
+# Both binaries ship in one image: one image to build, sign, scan and pin, and
+# the device plugin is never a different version from the exporter it feeds.
+# Static, so neither cares which glibc is around, and stripped because there is
+# nothing to debug in production.
+#
 # The symlinks are made here: the final stage has no shell to make them in.
 RUN set -eu; \
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
         -o /out/usr/local/bin/zfs-shim ./cmd/zfs-shim; \
+    CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
+        -o /out/usr/local/bin/zfs-device-plugin ./cmd/zfs-device-plugin; \
     ln -s zfs-shim /out/usr/local/bin/zpool; \
     ln -s zfs-shim /out/usr/local/bin/zfs
 

@@ -78,6 +78,15 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
+# These are effective precisely because the exporter is not privileged. The
+# device arrives from the device plugin instead, which is the whole reason this
+# chart carries one: `privileged: true` would silently discard the capability
+# drop and the seccomp profile above -- both measured, not assumed.
+#
+# With no capabilities, OpenZFS permits the exporter's reads and the kernel
+# refuses everything else: zfs_secpolicy_read requires nothing, while every
+# mutating ioctl goes through secpolicy_sys_config or secpolicy_zfs, which are
+# CAP_SYS_ADMIN or EPERM.
 securityContext:
   privileged: false
   allowPrivilegeEscalation: false
@@ -90,9 +99,46 @@ hostNetwork: false
 hostPID: false
 dnsPolicy: ClusterFirst
 
-# Character device the OpenZFS userland talks to the kernel module through.
-# Mounted from the host; there is no in-cluster substitute for it.
-devZfsHostPath: /dev/zfs
+# ---------------------------------------------------------------------------
+# Device plugin
+#
+# A container may only open a device the device cgroup permits, and Kubernetes
+# does not add hostPath devices to that allowlist. The two ways through are
+# `privileged: true`, which grants every capability and turns seccomp off, or a
+# device plugin, which lets the kubelet inject the device into an otherwise
+# unprivileged container. This chart takes the second.
+#
+# The plugin is a separate DaemonSet by necessity: the kubelet admits a pod
+# only once the resource it requests exists, so a plugin inside the exporter's
+# own pod could never start.
+# ---------------------------------------------------------------------------
+devicePlugin:
+  # Advertised resource. Distinctive on purpose, so it cannot collide with
+  # another plugin already advertising devices on the same node.
+  resourceName: zfs-exporter.io/dev-zfs
+
+  devicePath: /dev/zfs
+
+  # Where the kubelet expects plugin sockets. Hardcoded in the kubelet, but
+  # the root moves on some distributions.
+  kubeletPluginDir: /var/lib/kubelet/device-plugins
+
+  # How many pods may hold the device at once. One DaemonSet pod per node
+  # needs exactly one; raise it if something else will request the resource.
+  count: 1
+
+  # Empty by default: system-node-critical is the natural choice for a node
+  # component, but some clusters restrict those classes to kube-system.
+  priorityClassName: ""
+
+  podAnnotations: {}
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
 
 # The image bundles an OpenZFS userland for each supported branch and picks
 # the one matching the node at run time, by reading /sys/module/zfs/version --

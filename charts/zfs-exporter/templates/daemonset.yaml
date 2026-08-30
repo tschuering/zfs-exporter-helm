@@ -87,23 +87,30 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          # requests and limits are emitted separately so the device can be
+          # merged into limits -- an extended resource has to be a limit, and
+          # toYaml of the whole block would emit `limits` a second time.
+          #
+          # Requesting it is also what keeps this pod off nodes without ZFS:
+          # the plugin advertises the resource only where the device exists,
+          # so the scheduler will not place it anywhere else.
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- with .Values.resources.requests }}
+            requests:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+            limits:
+              {{- with .Values.resources.limits }}
+              {{- toYaml . | nindent 14 }}
+              {{- end }}
+              {{ .Values.devicePlugin.resourceName }}: 1
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- with .Values.extraVolumeMounts }}
           volumeMounts:
-            # The only host access the exporter has. Everything it reports
-            # comes through these ioctls.
-            - name: dev-zfs
-              mountPath: /dev/zfs
-            {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
-            {{- end }}
+          {{- end }}
+      {{- with .Values.extraVolumes }}
       volumes:
-        - name: dev-zfs
-          hostPath:
-            path: {{ .Values.devZfsHostPath }}
-            type: CharDevice
-        {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}

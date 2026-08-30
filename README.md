@@ -103,23 +103,61 @@ hashing each archive.
 
 ## Security posture
 
-The pod runs as root, and that is the entire privilege it holds. `/dev/zfs` is
-mode `0600 root:root`, so the ioctls behind `zpool list` need DAC ownership —
-not a capability, not `privileged: true`.
+The exporter is **not privileged** and holds **no capabilities**. It reads pool
+and dataset properties, and the kernel refuses it anything else.
 
-Everything else is off:
+That is not a statement of intent — it is how OpenZFS gates its own ioctls:
 
-- every capability dropped (`capabilities.drop: [ALL]`)
-- `allowPrivilegeEscalation: false`, `privileged: false`
-- `readOnlyRootFilesystem: true`
-- `hostNetwork: false`, `hostPID: false`
-- no service account token (`automountServiceAccountToken: false`) — the
-  exporter never talks to the Kubernetes API
-- one host mount: the `/dev/zfs` character device (the branch detection needs
-  no mount — `/sys/module` is already visible)
+```c
+zfs_secpolicy_read(...)  { return (0); }                            // stats: no privilege
+secpolicy_sys_config(cr) { return priv_policy(cr, CAP_SYS_ADMIN, EPERM); }
+secpolicy_zfs(cr)        { return priv_policy(cr, CAP_SYS_ADMIN, EACCES); }
+```
 
-The exporter reads pool and dataset properties. It never mounts, creates or
-destroys anything.
+Everything the exporter runs — `zpool list`, `zpool get`, `zfs get` — is
+registered with `zfs_secpolicy_read`. Every mutating path goes through the
+other two. With no capabilities, reads succeed and `zfs destroy` returns
+`permission denied` from the kernel, not from a check in this repository.
+
+So the exporter runs with `privileged: false`, `capabilities.drop: [ALL]`,
+`seccompProfile: RuntimeDefault`, `readOnlyRootFilesystem: true`, no host
+namespaces, **no host mounts at all**, and no service account token.
+
+### Why the device plugin exists
+
+A container may only open a device the device cgroup permits, and Kubernetes
+does not add hostPath devices to that allowlist. Mounting `/dev/zfs` with
+`hostPath` is not enough — the open fails with `Failed to initialize the libzfs
+library` regardless of file ownership.
+
+The only two ways through are `privileged: true` or a device plugin. And
+`privileged: true` is all-or-nothing: it grants the full capability set and
+disables seccomp, **discarding the settings above**.
+
+| | `privileged: true` | device plugin |
+| --- | --- | --- |
+| `CapEff` | `000001ffffffffff` | `0000000000000000` |
+| Seccomp | disabled | `RuntimeDefault` active |
+| `zfs destroy` | permitted by the kernel | `EPERM` |
+
+So the chart ships one (`cmd/zfs-device-plugin`), which lets the kubelet inject
+`/dev/zfs` into an unprivileged container. The plugin itself is privileged —
+the kubelet's plugin directory
+[requires it](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)
+— but it has no network listener, talks only to the kubelet over a Unix socket,
+and never opens the device it hands out. It is its own DaemonSet because the
+kubelet admits a pod only once the resource it requests is registered, so a
+plugin inside the exporter's pod could never start.
+
+Be clear about what this buys: the node still runs one privileged pod. What
+changes is that it is no longer the component with an HTTP listener, a
+third-party binary and known CVEs.
+
+### A side effect worth having
+
+The plugin advertises nothing on a node without `/dev/zfs`, so the exporter is
+never scheduled there — no `nodeSelector` to maintain, and no pod left
+`Running` while every collector fails.
 
 ### Scanner findings
 
@@ -187,13 +225,9 @@ $ helm install zfs-exporter zfs-exporter/zfs-exporter \
     --create-namespace
 ```
 
-On a cluster where only some nodes have ZFS, constrain it — otherwise the pods
-on the others sit there reporting failures:
-
-```yaml
-nodeSelector:
-  node-role.kubernetes.io/storage: "true"
-```
+On a cluster where only some nodes have ZFS, nothing needs constraining: the
+plugin advertises the resource only where `/dev/zfs` exists, so the exporter is
+never scheduled anywhere else.
 
 ### Scraping
 
@@ -226,10 +260,10 @@ key is commented. The ones most often changed:
 | Key | Default | |
 | --- | --- | --- |
 | `image.digest` | `""` | pin here for reproducible rollouts; wins over `tag` |
-| `nodeSelector` | `{}` | restrict to nodes that have ZFS |
 | `extraArgs` | `[]` | e.g. `--collector.dataset-snapshot`, `--pool=rpool` |
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
-| `devZfsHostPath` | `/dev/zfs` | |
+| `devicePlugin.resourceName` | `zfs-exporter.io/dev-zfs` | change only on a collision |
+| `devicePlugin.kubeletPluginDir` | `/var/lib/kubelet/device-plugins` | if your kubelet root differs |
 | `zfsUserlandVersion` | `""` | override branch detection, e.g. `"2.4"` |
 
 ## Alerting

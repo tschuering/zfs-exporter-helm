@@ -2,6 +2,17 @@
 
 Metrics:  http://{{ include "zfs-exporter.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/metrics
 
+On a first install the exporter pods are Pending for a few seconds with
+"Insufficient {{ .Values.devicePlugin.resourceName }}". That is expected, not a
+fault: helm creates both DaemonSets at once, and the scheduler cannot place the
+exporter until the device plugin has registered the resource with the kubelet.
+It resolves itself.
+
+A pod that stays Pending means the plugin found no /dev/zfs on any node it
+runs on:
+
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=device-plugin
+
 Check that the nodes can actually reach their pools -- a pod whose node has no
 ZFS kernel module stays Running and reports every collector as failed rather
 than crashing:

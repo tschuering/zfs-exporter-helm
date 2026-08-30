@@ -1,0 +1,97 @@
+---
+# Advertises the node's /dev/zfs to the kubelet so the exporter can be granted
+# the device without running privileged.
+#
+# This has to be its own DaemonSet, not a container alongside the exporter: the
+# kubelet only admits a pod once the resource it requests is registered, so a
+# plugin sharing that pod could never start -- the pod would wait on itself.
+#
+# It is privileged because the kubelet's plugin directory requires it, which
+# Kubernetes documents rather than leaves to choice. It has no network
+# listener, talks only to the kubelet over a Unix socket, and never opens the
+# device it hands out.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "zfs-exporter.fullname" . }}-device-plugin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "zfs-exporter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: device-plugin
+spec:
+  selector:
+    matchLabels:
+      {{- include "zfs-exporter.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: device-plugin
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "zfs-exporter.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: device-plugin
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.devicePlugin.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.devicePlugin.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      # Runs everywhere and reports zero devices where there is no ZFS, which
+      # is what keeps the exporter off those nodes without a nodeSelector.
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      hostNetwork: false
+      containers:
+        - name: device-plugin
+          image: {{ include "zfs-exporter.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /usr/local/bin/zfs-device-plugin
+          env:
+            - name: RESOURCE_NAME
+              value: {{ .Values.devicePlugin.resourceName | quote }}
+            - name: DEVICE_PATH
+              value: {{ .Values.devicePlugin.devicePath | quote }}
+            - name: PLUGIN_DIR
+              value: {{ .Values.devicePlugin.kubeletPluginDir | quote }}
+            - name: DEVICE_COUNT
+              value: {{ .Values.devicePlugin.count | quote }}
+          resources:
+            {{- toYaml .Values.devicePlugin.resources | nindent 12 }}
+          securityContext:
+            # Not a preference. The kubelet's plugin directory is documented as
+            # requiring a privileged security context, and privileged in
+            # Kubernetes is all-or-nothing: it grants every capability and
+            # disables seccomp regardless of what else is set here. Setting
+            # capabilities or a seccomp profile alongside it would read as a
+            # restriction while doing nothing, so neither is set.
+            privileged: true
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: kubelet-plugins
+              mountPath: {{ .Values.devicePlugin.kubeletPluginDir }}
+            # Only ever stat()ed, to decide whether to advertise anything.
+            - name: dev-zfs
+              mountPath: {{ .Values.devicePlugin.devicePath }}
+              readOnly: true
+      volumes:
+        - name: kubelet-plugins
+          hostPath:
+            path: {{ .Values.devicePlugin.kubeletPluginDir }}
+            type: Directory
+        - name: dev-zfs
+          hostPath:
+            path: {{ .Values.devicePlugin.devicePath }}
+            type: CharDevice
