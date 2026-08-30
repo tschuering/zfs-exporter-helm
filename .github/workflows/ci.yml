@@ -55,22 +55,65 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Everything here is the standard toolchain -- no third-party linters.
+
+      # -s as well as the default: it reports constructs the language has a
+      # shorter form for, which is the half of gofmt that changes how code
+      # reads rather than just where the spaces go.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l ./cmd)"
+          unformatted="$(gofmt -s -l ./cmd)"
           if [ -n "${unformatted}" ]; then
-            echo "::error::gofmt needed: ${unformatted}"
+            echo "::error::gofmt -s needed: ${unformatted}"
             exit 1
           fi
 
       - name: vet
         run: go vet ./...
 
+      # go.mod and go.sum drift silently: a dependency added and later removed
+      # leaves entries behind, and nothing else in the build objects. -diff
+      # reports without rewriting, so CI fails rather than quietly fixing it.
+      - name: modules are tidy
+        run: go mod tidy -diff
+
+      # Checks the module cache against the hashes in go.sum, so a dependency
+      # that changed content under an unchanged version is caught here.
+      - name: modules verify
+        run: go mod verify
+
+      # -race because the plugin is concurrent: a gRPC server, the
+      # ListAndWatch stream, the supervisor loop and a ticker all run at once,
+      # and the tests exercise the stream.
       - name: test
-        run: go test ./...
+        run: go test -race ./...
+
+      # Reachability, not presence. trivy lists every advisory in the module
+      # graph; govulncheck reports only those reaching a function this code
+      # actually calls, and prints the call path. That makes a finding here
+      # something to act on rather than something to triage, which is why it
+      # blocks.
+      #
+      # Pinned through the tool directive in go.mod, so the version is
+      # reviewed in a diff and renovate can move it.
+      - name: govulncheck
+        run: go tool govulncheck ./...
 
       - name: build
         run: CGO_ENABLED=0 go build ./...
+
+      # The image is built for both architectures, but that happens in the
+      # image job behind an emulated build. Compiling for arm64 here fails in
+      # seconds instead of minutes.
+      - name: cross-compile
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          for arch in amd64 arm64; do
+            echo "== ${arch}"
+            GOARCH="${arch}" go build ./...
+          done
 
   chart:
     runs-on: ubuntu-latest

@@ -25,12 +25,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/tschuering/zfs-exporter-helm/internal/logging"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -68,6 +71,11 @@ type config struct {
 }
 
 func main() {
+	// Before anything that might log: reading the configuration can warn about
+	// a malformed value, and that warning belongs in the same format as every
+	// line after it.
+	slog.SetDefault(logging.New(os.Stderr))
+
 	cfg := config{
 		resourceName: env("RESOURCE_NAME", defaultResourceName),
 		devicePath:   env("DEVICE_PATH", defaultDevicePath),
@@ -78,21 +86,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logf("advertising %s from %s (count %d)", cfg.resourceName, cfg.devicePath, cfg.count)
+	slog.Info("Advertising device",
+		"resource", cfg.resourceName, "device", cfg.devicePath, "count", cfg.count)
 
 	// Registration is not once-and-for-all: a kubelet restart wipes the plugin
 	// directory and every plugin has to come back. serve() returns when that
 	// happens, or on any error, and the loop starts over.
 	for ctx.Err() == nil {
 		if err := serve(ctx, cfg); err != nil && ctx.Err() == nil {
-			logf("restarting: %v", err)
+			slog.Error("Restarting after failure", "err", err)
 			select {
 			case <-ctx.Done():
 			case <-time.After(watchInterval):
 			}
 		}
 	}
-	logf("shutting down")
+	slog.Info("Shutting down")
 }
 
 // serve publishes the plugin socket, registers with the kubelet, and blocks
@@ -122,7 +131,7 @@ func serve(ctx context.Context, cfg config) error {
 	if err := register(ctx, cfg); err != nil {
 		return fmt.Errorf("registering with kubelet: %w", err)
 	}
-	logf("registered %s", cfg.resourceName)
+	slog.Info("Registered with kubelet", "resource", cfg.resourceName)
 
 	// A kubelet restart recreates kubelet.sock. Watching its identity is
 	// enough to notice, and needs no filesystem-notification dependency.
@@ -204,7 +213,7 @@ func (p *plugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_
 			if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices(healthy)}); err != nil {
 				return err
 			}
-			logf("reporting %d device(s)", healthy)
+			slog.Info("Reporting devices", "count", healthy)
 			last = healthy
 		}
 
@@ -306,12 +315,9 @@ func envInt(key string, fallback int) int {
 	}
 	var n int
 	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 1 {
-		logf("ignoring %s=%q: want a positive integer", key, v)
+		slog.Warn("Ignoring malformed value, want a positive integer",
+			"variable", key, "value", v)
 		return fallback
 	}
 	return n
-}
-
-func logf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "zfs-device-plugin: "+format+"\n", args...)
 }

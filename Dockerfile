@@ -21,7 +21,7 @@
 
 ARG DEBIAN_23_IMAGE=debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 ARG DEBIAN_24_IMAGE=debian:forky-slim@sha256:91b0aaebf7a1ccacfe7a9cbff6ab2d6be7d9b3b6cf1dfcf44b25f9095c0e0464
-ARG GO_IMAGE=golang:1.25-trixie@sha256:2c4c60ef415fbfa5e90300722293bef36c5e63fae17570ce18f580af933dbd73
+ARG GO_IMAGE=golang:1.26.7-trixie@sha256:e6e8ff4b72b128bb673613645c5ac415e4f537b2390e77a86ffc40622ab56da8
 ARG RUNTIME_IMAGE=gcr.io/distroless/base-debian13@sha256:9ef50bca108839d5986e4d84b7f7b2d79024c9293b7c35b162c6c55485bd5868
 
 # ---- OpenZFS 2.3.x userland (Debian trixie) --------------------------------
@@ -79,7 +79,11 @@ FROM ${GO_IMAGE} AS shim
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+# Both packages: cmd holds the two binaries, internal the logging format they
+# share. Copying only cmd builds nothing -- the import fails at compile time,
+# which is a slow way to find out.
 COPY cmd ./cmd
+COPY internal ./internal
 # Both binaries ship in one image: one image to build, sign, scan and pin, and
 # the device plugin is never a different version from the exporter it feeds.
 # Static, so neither cares which glibc is around, and stripped because there is

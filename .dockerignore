@@ -4,4 +4,5 @@
 !go.mod
 !go.sum
 !cmd/
+!internal/
 !hack/collect-runtime-deps.sh

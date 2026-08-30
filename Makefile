@@ -36,12 +36,16 @@ smoke: build ## Run the image and scrape it
 			|| { echo "FAIL: $$tree userland"; exit 1; }; \
 	done
 
-lint: ## hadolint, shellcheck, yamllint, go vet and tests
+lint: ## hadolint, shellcheck, yamllint and the standard go checks
 	hadolint Dockerfile
 	shellcheck hack/*.sh
 	yamllint --strict .
+	gofmt -s -l ./cmd
 	go vet ./...
-	go test ./...
+	go mod tidy -diff
+	go mod verify
+	go tool govulncheck ./...
+	go test -race ./...
 
 chart: ## helm lint plus render and schema-check every ci/ values file
 	helm lint $(CHART) --strict
