@@ -26,16 +26,27 @@ This repository packages [pdf/zfs_exporter][upstream]; it does not maintain it.
 
 ## What the deployment assumes
 
-The chart runs the exporter as root with the host's `/dev/zfs` mounted, because
-that device is `0600 root:root` and the ioctls need DAC ownership. Everything
-else is dropped — no capabilities, read-only rootfs, no privilege escalation,
-no host namespaces, no service account token.
+The exporter runs unprivileged, with every capability dropped, a
+`RuntimeDefault` seccomp profile, a read-only root filesystem and no host
+mounts. `/dev/zfs` reaches it through the bundled device plugin rather than a
+hostPath, which is what lets those settings be real: `privileged: true` would
+discard the capability drop and the seccomp profile outright.
 
-A consequence worth stating plainly: anyone who can execute in this pod can
-read every pool and dataset property on the node — layout, names, capacities.
-The metrics endpoint exposes the same, so treat `:9134` as sensitive and keep
-it off untrusted networks. `networkPolicy.enabled` in the chart restricts who
-may reach it.
+With no capabilities, OpenZFS permits the reads the exporter performs and the
+kernel denies everything else — `zfs_secpolicy_read` requires no privilege,
+while every mutating ioctl goes through `secpolicy_sys_config` or
+`secpolicy_zfs`, both of which are `CAP_SYS_ADMIN` or an error.
+
+The device plugin *is* privileged, because the kubelet's plugin directory is
+documented as requiring it. It has no network listener, speaks only to the
+kubelet over a Unix socket, and never opens the device it advertises. So the
+node still runs one privileged pod; what changed is that it is not the one
+serving HTTP.
+
+A consequence worth stating plainly: anyone who can reach the metrics endpoint
+can read every pool and dataset property on the node — layout, names,
+capacities. Treat `:9134` as sensitive and keep it off untrusted networks.
+`networkPolicy.enabled` in the chart restricts who may reach it.
 
 ## Known findings in the exporter binary
 
