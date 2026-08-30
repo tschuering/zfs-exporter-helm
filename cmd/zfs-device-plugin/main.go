@@ -47,6 +47,13 @@ const (
 	defaultPluginDir    = pluginapi.DevicePluginPath
 	socketName          = "zfs-exporter.sock"
 
+	// Deliberately not pluginapi.KubeletSocket: that constant is the full
+	// path, so joining it onto the plugin directory yields
+	// /var/lib/kubelet/device-plugins/var/lib/kubelet/device-plugins/kubelet.sock
+	// -- which is exactly the bug this replaced. The directory has to stay
+	// configurable, so only the file name belongs here.
+	kubeletSocketName = "kubelet.sock"
+
 	// How often the device is re-checked, and how often the kubelet socket is
 	// examined for the replacement that a kubelet restart produces.
 	pollInterval  = 30 * time.Second
@@ -94,7 +101,7 @@ func serve(ctx context.Context, cfg config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	socket := filepath.Join(cfg.pluginDir, socketName)
+	socket := pluginSocketPath(cfg.pluginDir)
 	if err := os.Remove(socket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("clearing stale socket: %w", err)
 	}
@@ -119,7 +126,7 @@ func serve(ctx context.Context, cfg config) error {
 
 	// A kubelet restart recreates kubelet.sock. Watching its identity is
 	// enough to notice, and needs no filesystem-notification dependency.
-	kubeletSocket := filepath.Join(cfg.pluginDir, pluginapi.KubeletSocket)
+	kubeletSocket := kubeletSocketPath(cfg.pluginDir)
 	id, err := identity(kubeletSocket)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", kubeletSocket, err)
@@ -148,7 +155,7 @@ func serve(ctx context.Context, cfg config) error {
 // register tells the kubelet the socket to call back on and the resource name
 // to advertise.
 func register(ctx context.Context, cfg config) error {
-	target := "unix://" + filepath.Join(cfg.pluginDir, pluginapi.KubeletSocket)
+	target := "unix://" + kubeletSocketPath(cfg.pluginDir)
 
 	// A Unix socket on the same filesystem: no transport security to
 	// negotiate, and nothing else can reach it.
@@ -249,6 +256,18 @@ func devices(n int) []*pluginapi.Device {
 		})
 	}
 	return out
+}
+
+// kubeletSocketPath is where the kubelet listens for registrations, and
+// pluginSocketPath is where this plugin listens for the kubelet's calls back.
+// Both are relative to the plugin directory, which moves on distributions that
+// site the kubelet root elsewhere.
+func kubeletSocketPath(pluginDir string) string {
+	return filepath.Join(pluginDir, kubeletSocketName)
+}
+
+func pluginSocketPath(pluginDir string) string {
+	return filepath.Join(pluginDir, socketName)
 }
 
 func present(path string) bool {

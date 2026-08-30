@@ -36,10 +36,12 @@ smoke: build ## Run the image and scrape it
 			|| { echo "FAIL: $$tree userland"; exit 1; }; \
 	done
 
-lint: ## hadolint, shellcheck, yamllint
+lint: ## hadolint, shellcheck, yamllint, go vet and tests
 	hadolint Dockerfile
 	shellcheck hack/*.sh
 	yamllint --strict .
+	go vet ./...
+	go test ./...
 
 chart: ## helm lint plus render and schema-check every ci/ values file
 	helm lint $(CHART) --strict
