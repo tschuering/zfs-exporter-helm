@@ -6,7 +6,7 @@ type: application
 
 # The release version, shared with the image: one git tag builds both, so the
 # chart's image.tag defaults to this rather than to appVersion below.
-version: 0.1.0
+version: 0.1.1
 
 # The zfs_exporter release inside the image. Informational: several packaging
 # releases can share one appVersion, which is why it does not name the image
