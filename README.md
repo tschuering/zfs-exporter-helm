@@ -262,7 +262,7 @@ key is commented. The ones most often changed:
 | `image.digest` | `""` | pin here for reproducible rollouts; wins over `tag` |
 | `extraArgs` | `[]` | e.g. `--collector.dataset-snapshot`, `--pool=rpool` |
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
-| `devicePlugin.resourceName` | `zfs-exporter.io/dev-zfs` | change only on a collision |
+| `devicePlugin.resourceName` | `tschuering.github.io/dev-zfs` | change only on a collision |
 | `devicePlugin.kubeletPluginDir` | `/var/lib/kubelet/device-plugins` | if your kubelet root differs |
 | `zfsUserlandVersion` | `""` | override branch detection, e.g. `"2.4"` |
 

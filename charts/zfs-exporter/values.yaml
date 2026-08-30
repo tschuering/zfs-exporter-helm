@@ -113,9 +113,12 @@ dnsPolicy: ClusterFirst
 # own pod could never start.
 # ---------------------------------------------------------------------------
 devicePlugin:
-  # Advertised resource. Distinctive on purpose, so it cannot collide with
-  # another plugin already advertising devices on the same node.
-  resourceName: zfs-exporter.io/dev-zfs
+  # Advertised resource. The prefix is a vendor domain by convention -- and
+  # this one is the host that serves this chart's own Helm repository, so it
+  # is a domain the project actually controls rather than a plausible-looking
+  # name someone else might own. Distinctive enough that it cannot collide
+  # with another plugin advertising devices on the same node.
+  resourceName: tschuering.github.io/dev-zfs
 
   devicePath: /dev/zfs
 

@@ -3,7 +3,7 @@
 # default install skips.
 image:
   registry: ghcr.io
-  repository: example/zfs-exporter
+  repository: tschuering/zfs-exporter
   digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 serviceMonitor:
@@ -22,7 +22,8 @@ networkPolicy:
           kubernetes.io/metadata.name: monitoring
 
 devicePlugin:
-  resourceName: example.com/dev-zfs
+  # Deliberately not the default, so the override path is exercised.
+  resourceName: tschuering.github.io/dev-zfs-alt
   kubeletPluginDir: /var/lib/k0s/kubelet/device-plugins
   count: 2
   priorityClassName: system-node-critical
@@ -33,4 +34,4 @@ extraArgs:
   - --collector.dataset-snapshot
 
 commonLabels:
-  example.com/owner: platform
+  tschuering.github.io/owner: platform

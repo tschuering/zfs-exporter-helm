@@ -38,7 +38,11 @@ import (
 )
 
 const (
-	defaultResourceName = "zfs-exporter.io/dev-zfs"
+	// Extended resource names are vendor-qualified by convention
+	// (nvidia.com/gpu, devic.es/dri), so the prefix should be a domain
+	// whoever ships the plugin actually controls. This one is the host
+	// serving the project's Helm repository.
+	defaultResourceName = "tschuering.github.io/dev-zfs"
 	defaultDevicePath   = "/dev/zfs"
 	defaultPluginDir    = pluginapi.DevicePluginPath
 	socketName          = "zfs-exporter.sock"
