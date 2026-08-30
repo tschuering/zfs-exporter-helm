@@ -4,12 +4,13 @@ name: zfs-exporter
 description: Prometheus exporter for per-dataset and per-pool OpenZFS metrics
 type: application
 
-# The chart's own version. Independent of appVersion -- a chart-only change
-# (new value, fixed template) bumps this and leaves appVersion alone.
+# The release version, shared with the image: one git tag builds both, so the
+# chart's image.tag defaults to this rather than to appVersion below.
 version: 0.1.0
 
-# Upstream zfs_exporter release the default image is built from.
-# hack/update-upstream.sh moves this with the Dockerfile pin.
+# The zfs_exporter release inside the image. Informational: several packaging
+# releases can share one appVersion, which is why it does not name the image
+# tag. hack/update-upstream.sh moves this with the Dockerfile pin.
 appVersion: "2.4.1"
 
 home: https://github.com/tschuering/zfs-exporter-helm

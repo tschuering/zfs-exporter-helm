@@ -4,8 +4,11 @@
 image:
   registry: ghcr.io
   repository: tschuering/zfs-exporter
-  # Defaults to the chart's appVersion. Set `digest` instead to pin
-  # reproducibly -- if both are set the digest wins and the tag is ignored.
+  # Defaults to the chart version, not appVersion: the image and the chart are
+  # cut from the same release tag and carry the same version, whereas
+  # appVersion names the exporter inside the image, which several releases can
+  # share. Set `digest` instead to pin reproducibly -- if both are set the
+  # digest wins and the tag is ignored.
   tag: ""
   digest: ""
   pullPolicy: IfNotPresent

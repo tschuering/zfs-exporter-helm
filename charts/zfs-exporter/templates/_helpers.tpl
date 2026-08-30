@@ -58,6 +58,6 @@ rollout reproducible, and mixing both silently ignores the tag.
 {{- if .Values.image.digest -}}
 {{- printf "%s@%s" $repo .Values.image.digest -}}
 {{- else -}}
-{{- printf "%s:%s" $repo (default .Chart.AppVersion .Values.image.tag) -}}
+{{- printf "%s:%s" $repo (default .Chart.Version .Values.image.tag) -}}
 {{- end -}}
 {{- end -}}

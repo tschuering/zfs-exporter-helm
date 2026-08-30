@@ -141,18 +141,25 @@ $ cosign verify ghcr.io/tschuering/zfs-exporter:0.1.0 \
 
 [cosign]: https://docs.sigstore.dev/cosign/overview/
 
-## Tags
+## Versions and tags
 
-A release tagged `v0.1.0` publishes the image as:
+One git tag cuts both the image and the chart, and they carry the same version.
+A release tagged `v0.1.0` publishes:
 
-| Tag | Moves? |
-| --- | --- |
-| `0.1.0`, `0.1` | no — the packaging release |
-| `2.4.1` | yes — the packaged exporter version, re-pointed if a later packaging release rebuilds it |
-| `latest` | yes |
+| Artifact | Tag | Moves? |
+| --- | --- | --- |
+| image | `0.1.0` | no |
+| image | `0.1` | yes, within the minor |
+| image | `latest` | yes |
+| chart | `0.1.0` | no |
 
-The chart asks for the exporter version by default, since that is its
-`appVersion`. Set `image.digest` for a rollout that cannot move under you.
+There is deliberately **no `2.4.1` image tag**. That number is the exporter's,
+and it is the one thing that cannot distinguish two of our releases: packaging
+the same upstream version twice can still mean a different base image, a
+different ZFS userland or a security rebuild. `appVersion` in the chart records
+which exporter is inside; the version you deploy is ours.
+
+For a rollout that cannot move under you, set `image.digest`.
 
 ## Install
 
