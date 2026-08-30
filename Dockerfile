@@ -79,7 +79,11 @@ FROM ${GO_IMAGE} AS shim
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+# Both packages: cmd holds the two binaries, internal the logging format they
+# share. Copying only cmd builds nothing -- the import fails at compile time,
+# which is a slow way to find out.
 COPY cmd ./cmd
+COPY internal ./internal
 # Both binaries ship in one image: one image to build, sign, scan and pin, and
 # the device plugin is never a different version from the exporter it feeds.
 # Static, so neither cares which glibc is around, and stripped because there is
