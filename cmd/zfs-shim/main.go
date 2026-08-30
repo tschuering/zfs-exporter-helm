@@ -22,12 +22,15 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/tschuering/zfs-exporter-helm/internal/logging"
 )
 
 const (
@@ -43,12 +46,14 @@ const (
 var majorMinor = regexp.MustCompile(`^(\d+)\.(\d+)`)
 
 func main() {
+	slog.SetDefault(logging.New(os.Stderr))
+
 	name := filepath.Base(os.Args[0])
 	if name != "zpool" && name != "zfs" {
 		fatal(fmt.Errorf("invoked as %q; expected zpool or zfs", name))
 	}
 
-	version, err := detectVersion()
+	version, err := detectVersion(versionSource)
 	if err != nil {
 		fatal(err)
 	}
@@ -57,7 +62,7 @@ func main() {
 	if _, err := os.Stat(tree); err != nil {
 		fatal(fmt.Errorf(
 			"no bundled OpenZFS userland for host version %s; this image carries %s",
-			version, strings.Join(available(), ", ")))
+			version, strings.Join(available(treeRoot), ", ")))
 	}
 
 	loader, err := findLoader(tree)
@@ -76,7 +81,7 @@ func main() {
 }
 
 // detectVersion returns the major.minor of the host's ZFS kernel module.
-func detectVersion() (string, error) {
+func detectVersion(source string) (string, error) {
 	if v := os.Getenv(versionEnv); v != "" {
 		m := majorMinor.FindStringSubmatch(v)
 		if m == nil {
@@ -85,21 +90,21 @@ func detectVersion() (string, error) {
 		return m[1] + "." + m[2], nil
 	}
 
-	raw, err := os.ReadFile(versionSource)
+	raw, err := os.ReadFile(source)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf(
 			"%s does not exist: the ZFS kernel module is not loaded on this "+
-				"node, so there is nothing to report on", versionSource)
+				"node, so there is nothing to report on", source)
 	}
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", versionSource, err)
+		return "", fmt.Errorf("reading %s: %w", source, err)
 	}
 
 	v := strings.TrimSpace(string(raw))
 	m := majorMinor.FindStringSubmatch(v)
 	if m == nil {
 		return "", fmt.Errorf("%s contains %q, which is not a version",
-			versionSource, v)
+			source, v)
 	}
 	return m[1] + "." + m[2], nil
 }
@@ -119,8 +124,8 @@ func findLoader(tree string) (string, error) {
 }
 
 // available lists the userland versions bundled into this image.
-func available() []string {
-	entries, err := os.ReadDir(treeRoot)
+func available(root string) []string {
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		return []string{"none"}
 	}
@@ -138,6 +143,6 @@ func available() []string {
 }
 
 func fatal(err error) {
-	fmt.Fprintf(os.Stderr, "zfs-shim: %v\n", err)
+	slog.Error("Cannot dispatch to a bundled OpenZFS userland", "err", err)
 	os.Exit(1)
 }
