@@ -249,3 +249,89 @@ jobs:
             --notes-file /tmp/notes.md \
             "${chart}" \
             sbom.spdx.json
+
+  # A classic HTTP Helm repository, published alongside the OCI one.
+  #
+  # It is nothing but a static index.yaml. The chart tarballs are the assets
+  # the release job already attached to each GitHub release, so nothing is
+  # stored twice and both publication paths describe the same bytes -- the
+  # index just points into the releases.
+  #
+  #   helm repo add zfs-exporter https://tschuering.github.io/zfs-exporter-helm
+  #
+  # Runs after `release`, because the URLs it writes only resolve once the
+  # release carrying them exists.
+  pages:
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: rebuild the index
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/idx
+
+          # Packaged again rather than downloaded from the release: `helm repo
+          # index` reads chart metadata out of the tarball, so the file has to
+          # be present. Same chart, same helm, so the same bytes as the asset.
+          helm package charts/zfs-exporter --destination /tmp/idx
+
+          # Merge onto the published index so previous versions survive. Absent
+          # on the first release, which is the only time the branch does not
+          # exist yet.
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git fetch --depth 1 origin gh-pages
+            git show origin/gh-pages:index.yaml > /tmp/old-index.yaml
+            helm repo index /tmp/idx \
+              --url "https://github.com/${REPO}/releases/download/${TAG}" \
+              --merge /tmp/old-index.yaml
+          else
+            helm repo index /tmp/idx \
+              --url "https://github.com/${REPO}/releases/download/${TAG}"
+          fi
+
+          echo "== index.yaml =="
+          cat /tmp/idx/index.yaml
+
+      - name: publish to gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          cp /tmp/idx/index.yaml "${out}/index.yaml"
+
+          # Pages serves the branch root, so a bare visit gets something other
+          # than a 404.
+          cat > "${out}/index.html" <<HTML
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>zfs-exporter Helm repository</title>
+          <h1>zfs-exporter</h1>
+          <p><code>helm repo add zfs-exporter https://tschuering.github.io/zfs-exporter-helm</code></p>
+          <p>Charts are served from the <a href="https://github.com/${REPO}/releases">releases</a>.
+             Source: <a href="https://github.com/${REPO}">${REPO}</a>.</p>
+          HTML
+
+          cd "${out}"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.yaml index.html
+          git commit -q -m "Helm repository index for ${TAG}"
+
+          # A single-commit orphan branch, force-pushed. The index is generated
+          # and merged from the previous published copy above, so its history
+          # carries nothing the releases do not already record.
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" gh-pages

@@ -167,8 +167,22 @@ For a rollout that cannot move under you, set `image.digest`.
 
 ## Install
 
+From the OCI registry:
+
 ```console
 $ helm install zfs-exporter oci://ghcr.io/tschuering/charts/zfs-exporter \
+    --namespace monitoring \
+    --create-namespace
+```
+
+Or as a classic Helm repository, if that suits your tooling better. Both serve
+the same chart — the repository index points at the tarballs attached to the
+GitHub releases:
+
+```console
+$ helm repo add zfs-exporter https://tschuering.github.io/zfs-exporter-helm
+$ helm repo update
+$ helm install zfs-exporter zfs-exporter/zfs-exporter \
     --namespace monitoring \
     --create-namespace
 ```
