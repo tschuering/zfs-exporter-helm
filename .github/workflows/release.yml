@@ -47,6 +47,18 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
+      # The release version is the tag. A run from a branch carries no version
+      # to publish, so it stops here. Without this guard the failure comes
+      # later and reads as something else: `helm package --version` rejects a
+      # branch name as invalid semver, and the image build gets an empty tag
+      # list.
+      - name: refuse a non-tag ref
+        run: |
+          case "${{ github.ref }}" in
+            refs/tags/v*) ;;
+            *) echo "::error::release runs on a v* tag only"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -155,12 +167,17 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           echo "${TOKEN}" | helm registry login "${REGISTRY}" \
             --username "${ACTOR}" --password-stdin
 
-          helm package charts/zfs-exporter --destination /tmp/chart
+          # The version comes from the tag, not from Chart.yaml. Chart.yaml
+          # holds a placeholder, so every `helm package` call in this workflow
+          # passes --version. A call without it publishes the placeholder.
+          helm package charts/zfs-exporter --version "${TAG#v}" \
+            --destination /tmp/chart
           package="$(ls /tmp/chart/*.tgz)"
 
           # helm prints "Pushed:" and "Digest:" on stdout, not stderr, so both
@@ -174,7 +191,7 @@ jobs:
             exit 1
           fi
 
-          version="$(basename "${package}" .tgz | sed 's/^zfs-exporter-//')"
+          version="${TAG#v}"
           echo "ref=${REGISTRY}/${OWNER}/charts/zfs-exporter@${digest}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
@@ -203,7 +220,11 @@ jobs:
           name: sbom
 
       - name: package chart for download
-        run: helm package charts/zfs-exporter --destination /tmp/chart
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          helm package charts/zfs-exporter --version "${TAG#v}" \
+            --destination /tmp/chart
 
       - name: create release
         env:
@@ -282,7 +303,8 @@ jobs:
           # Packaged again rather than downloaded from the release: `helm repo
           # index` reads chart metadata out of the tarball, so the file has to
           # be present. Same chart, same helm, so the same bytes as the asset.
-          helm package charts/zfs-exporter --destination /tmp/idx
+          helm package charts/zfs-exporter --version "${TAG#v}" \
+            --destination /tmp/idx
 
           # Merge onto the published index so previous versions survive. Absent
           # on the first release, which is the only time the branch does not
