@@ -1,13 +1,13 @@
-# sha256 of the upstream release archives this image is built from, one line
-# per architecture, in `sha256sum` format.
+# The sha256 of each upstream release archive that this image is built from.
+# One line per architecture, in `sha256sum` format.
 #
-# Computed by downloading each archive and hashing it locally
-# (hack/update-upstream.sh), not copied out of the release's own sha256sums.txt
-# -- that file ships from the same directory as the artifact it covers, so it
-# would be verifying the release against itself. Pinned here, a swapped
-# artifact fails the build instead.
+# hack/update-upstream.sh computes these digests. It downloads each archive and
+# hashes it locally. The digests are not copied from the release's own
+# sha256sums.txt. That file comes from the same directory as the artifact that
+# it covers, so it would verify the release against itself. With the digests
+# pinned here, a replaced artifact fails the build instead.
 #
-# These belong to the version in the Dockerfile's ZFS_EXPORTER_VERSION ARG.
-# Move both together.
+# These digests belong to the version in the Dockerfile ARG
+# ZFS_EXPORTER_VERSION. Move both together.
 60489e74e8f41eadff4f313fb16e94fc0964d37b9cf1be79c25c927b285a3228  zfs_exporter-2.4.1.linux-amd64.tar.gz
 5cbc7a0463fc32cb71d947f7bd302108952d84c7cec303717aa40304358d27d5  zfs_exporter-2.4.1.linux-arm64.tar.gz

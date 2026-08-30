@@ -29,7 +29,7 @@ spec:
       scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
       honorLabels: {{ .Values.serviceMonitor.honorLabels }}
       relabelings:
-        # Per-node metrics are only useful if you can tell the nodes apart.
+        # Per-node metrics are useful only if a reader can separate the nodes.
         - sourceLabels: [__meta_kubernetes_pod_node_name]
           targetLabel: node
         {{- with .Values.serviceMonitor.relabelings }}

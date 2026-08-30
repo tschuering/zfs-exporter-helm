@@ -1,11 +1,12 @@
-{{/* Chart name, overridable. */}}
+{{/* The chart name. A value can override it. */}}
 {{- define "zfs-exporter.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{/*
-Fully qualified name. Release-prefixed unless the release is already named
-after the chart, which would produce "zfs-exporter-zfs-exporter".
+The fully qualified name. It carries the release name as a prefix, unless the
+release already has the name of the chart. That case would give
+"zfs-exporter-zfs-exporter".
 */}}
 {{- define "zfs-exporter.fullname" -}}
 {{- if .Values.fullnameOverride -}}
@@ -50,8 +51,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-Image reference. A digest wins over a tag: pinning by digest is what makes a
-rollout reproducible, and mixing both silently ignores the tag.
+The image reference. A digest overrides a tag. A digest is what makes a
+rollout reproducible, and a value that sets both silently ignores the tag.
 */}}
 {{- define "zfs-exporter.image" -}}
 {{- $repo := printf "%s/%s" .Values.image.registry .Values.image.repository -}}

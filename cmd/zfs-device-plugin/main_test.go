@@ -12,12 +12,12 @@ import (
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
-// The kubelet's own constant for its socket is a full path, not a file name,
-// so joining it onto the plugin directory produced
+// The kubelet's own constant for its socket holds a full path, not a file
+// name. A join of that constant onto the plugin directory gave
 // /var/lib/kubelet/device-plugins/var/lib/kubelet/device-plugins/kubelet.sock
-// and registration failed with ENOENT. Nothing in CI can exercise
-// registration -- it needs a kubelet -- but the path arithmetic is testable,
-// and that is where the bug was.
+// and registration failed with ENOENT. CI cannot run a registration, because
+// that needs a kubelet. But CI can test the path arithmetic, and the bug was
+// in the path arithmetic.
 func TestSocketPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -32,14 +32,14 @@ func TestSocketPaths(t *testing.T) {
 			wantPlugin:  "/var/lib/kubelet/device-plugins/zfs-exporter.sock",
 		},
 		{
-			// The constant carries one, and callers may too.
+			// The constant ends with a slash, and a caller can do the same.
 			name:        "trailing slash",
 			dir:         "/var/lib/kubelet/device-plugins/",
 			wantKubelet: "/var/lib/kubelet/device-plugins/kubelet.sock",
 			wantPlugin:  "/var/lib/kubelet/device-plugins/zfs-exporter.sock",
 		},
 		{
-			// Distributions that site the kubelet root elsewhere.
+			// Some distributions put the kubelet root elsewhere.
 			name:        "custom kubelet root",
 			dir:         "/var/lib/k0s/kubelet/device-plugins",
 			wantKubelet: "/var/lib/k0s/kubelet/device-plugins/kubelet.sock",
@@ -57,11 +57,10 @@ func TestSocketPaths(t *testing.T) {
 	}
 }
 
-// fakeKubelet answers the Registration service the way the real kubelet does,
-// on a socket in a temp directory. It is what makes registration testable
-// without a node: the code under test only needs something listening at the
-// path it computes, and computing that path wrong is precisely the bug this
-// guards against.
+// fakeKubelet answers the Registration service as the real kubelet does, on a
+// socket in a temporary directory. It makes registration testable without a
+// node. The code under test needs only a listener at the path that it
+// computes, and a wrong path is the bug that this test guards against.
 type fakeKubelet struct {
 	pluginapi.UnimplementedRegistrationServer
 	got chan *pluginapi.RegisterRequest
@@ -72,10 +71,10 @@ func (f *fakeKubelet) Register(_ context.Context, req *pluginapi.RegisterRequest
 	return &pluginapi.Empty{}, nil
 }
 
-// socketDir returns a temp directory short enough to hold a unix socket.
-// sun_path is 104 bytes on darwin and 108 on linux, and t.TempDir() on macOS
-// hands back /var/folders/<...>/<TestName><digits>/001, which overruns it
-// before the socket name is even appended.
+// socketDir returns a temporary directory with a path short enough for a unix
+// socket. sun_path is 104 bytes on darwin and 108 bytes on linux. On macOS,
+// t.TempDir() returns /var/folders/<...>/<TestName><digits>/001, which exceeds
+// that limit before the socket name is added.
 func socketDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "zdp")
@@ -133,8 +132,8 @@ func TestRegisterReachesTheKubelet(t *testing.T) {
 	}
 }
 
-// Registration against a directory with no kubelet must fail rather than
-// appear to succeed -- the supervisor loop relies on the error to retry.
+// Registration against a directory with no kubelet must fail. It must not
+// appear to succeed, because the supervisor loop uses the error to retry.
 func TestRegisterFailsWithoutKubelet(t *testing.T) {
 	cfg := config{resourceName: "example.test/dev-zfs", pluginDir: socketDir(t), count: 1}
 	if err := register(context.Background(), cfg); err == nil {
@@ -142,9 +141,9 @@ func TestRegisterFailsWithoutKubelet(t *testing.T) {
 	}
 }
 
-// The DeviceSpec is what the kubelet acts on. Permissions in particular are
-// load-bearing: libzfs opens /dev/zfs O_RDWR even to list a pool, so "r" here
-// would fail at open() on a real node and nowhere earlier.
+// The kubelet acts on the DeviceSpec. Permissions in particular carry weight.
+// libzfs opens /dev/zfs with O_RDWR even to list a pool, so "r" here would
+// fail at open() on a real node, and at no earlier point.
 func TestAllocateReturnsTheDevice(t *testing.T) {
 	p := &plugin{cfg: config{devicePath: "/dev/null", count: 1}, ctx: context.Background()}
 
@@ -180,8 +179,8 @@ func TestAllocateRefusesWhenTheDeviceIsGone(t *testing.T) {
 	}
 }
 
-// present() is what decides whether a node advertises anything at all, so it
-// has to distinguish a character device from a file that merely exists.
+// present() decides whether a node advertises any device, so it must separate
+// a character device from a file that only exists.
 func TestPresent(t *testing.T) {
 	if !present("/dev/null") {
 		t.Error("/dev/null is a character device and should be present")
@@ -198,7 +197,7 @@ func TestPresent(t *testing.T) {
 	}
 }
 
-// listAndWatchRecorder stands in for the kubelet's side of the stream.
+// listAndWatchRecorder replaces the kubelet's side of the stream.
 type listAndWatchRecorder struct {
 	pluginapi.DevicePlugin_ListAndWatchServer
 	ctx  context.Context

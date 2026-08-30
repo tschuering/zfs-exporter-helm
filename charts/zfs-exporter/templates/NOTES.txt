@@ -2,43 +2,42 @@
 
 Metrics:  http://{{ include "zfs-exporter.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/metrics
 
-On a first install the exporter pods are Pending for a few seconds with
-"Insufficient {{ .Values.devicePlugin.resourceName }}". That is expected, not a
-fault: helm creates both DaemonSets at once, and the scheduler cannot place the
-exporter until the device plugin has registered the resource with the kubelet.
-It resolves itself.
+On a first install, the exporter pods stay Pending for a few seconds with
+"Insufficient {{ .Values.devicePlugin.resourceName }}". That is expected,
+and not a fault. Helm creates both DaemonSets at the same time, and the
+scheduler cannot place the exporter until the device plugin registers the
+resource with the kubelet. The condition clears itself.
 
-A pod that stays Pending means the plugin found no /dev/zfs on any node it
-runs on:
+A pod that stays Pending means the plugin found no /dev/zfs on any node where
+it runs:
 
   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=device-plugin
 
-Check that the nodes can actually reach their pools -- a pod whose node has no
-ZFS kernel module stays Running and reports every collector as failed rather
-than crashing:
+Check that the nodes can reach their pools. A pod on a node with no ZFS kernel
+module stays Running and reports every collector as failed. It does not crash:
 
   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/name={{ include "zfs-exporter.name" . }} --tail=20
 
   kubectl -n {{ .Release.Namespace }} exec ds/{{ include "zfs-exporter.fullname" . }} -- \
     /usr/local/bin/zfs_exporter --version
 
-A healthy scrape has zfs_scrape_collector_success{collector="pool"} 1. Alert on
-it: the exporter answers 200 whether or not it could read anything.
+A healthy scrape reports zfs_scrape_collector_success{collector="pool"} 1.
+Alert on that metric: the exporter answers 200 even if it read nothing.
 
-If a node's OpenZFS branch is not one the image carries, the logs say so by
-name ("zfs-shim: no bundled OpenZFS userland for host version ..."). Set
-zfsUserlandVersion to override the detection.
+If the image does not carry a node's OpenZFS branch, the logs name that branch
+("zfs-shim: no bundled OpenZFS userland for host version ..."). Set
+zfsUserlandVersion to replace the detection.
 
 {{- if not .Values.serviceMonitor.enabled }}
 
-No ServiceMonitor was created. Set serviceMonitor.enabled=true with the
-Prometheus Operator, or prometheusAnnotations.enabled=true for agents that
-discover by pod annotation.
+The chart created no ServiceMonitor. With the Prometheus Operator, set
+serviceMonitor.enabled=true. For agents that discover by pod annotation, set
+prometheusAnnotations.enabled=true.
 {{- end }}
 
 {{- if .Values.image.digest }}
 {{- else }}
 
-The image is pinned by tag, not digest. Set image.digest for a reproducible
+The image is pinned by tag, not by digest. Set image.digest for a reproducible
 rollout.
 {{- end }}

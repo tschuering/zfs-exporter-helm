@@ -1,24 +1,26 @@
 // Command zfs-device-plugin advertises the node's /dev/zfs to the kubelet as a
-// schedulable resource, so a pod can be granted the device without running
-// privileged.
+// schedulable resource. The kubelet can then give the device to a pod that
+// does not run privileged.
 //
-// Why this exists at all: a container may only open a device node the device
-// cgroup permits, and Kubernetes does not add hostPath devices to that
-// allowlist. The only in-tree ways through are `privileged: true` -- which
-// grants every capability and disables seccomp, both measured, not assumed --
-// or a device plugin, which lets the kubelet inject the device into an
+// A container can open only a device node that the device cgroup permits, and
+// Kubernetes does not add hostPath devices to that allowlist. Two in-tree
+// solutions exist. The first is `privileged: true`, which grants every
+// capability and disables seccomp. Both effects are measured, not assumed. The
+// second is a device plugin, which lets the kubelet insert the device into an
 // otherwise unprivileged container.
 //
-// That distinction is the whole point. OpenZFS gates its mutating ioctls on
-// CAP_SYS_ADMIN (secpolicy_sys_config, secpolicy_zfs) while its read paths
-// require nothing (zfs_secpolicy_read). So an exporter holding the device with
-// no capabilities can read pool and dataset state, and the kernel refuses
-// anything that would change it. A privileged exporter has no such protection.
+// That difference is the reason this plugin exists. OpenZFS gates its mutating
+// ioctls on CAP_SYS_ADMIN (secpolicy_sys_config, secpolicy_zfs), and its read
+// paths require no privilege (zfs_secpolicy_read). An exporter that holds the
+// device with no capabilities can therefore read pool and dataset state, and
+// the kernel refuses every operation that would change that state. A
+// privileged exporter has no such protection.
 //
-// This plugin is privileged, because the kubelet's plugin directory demands it
-// -- that is documented, not a choice. What it is not: reachable. It serves one
-// gRPC service on a Unix socket in that directory, has no network listener, and
-// never opens the device it hands out.
+// This plugin is privileged, because the kubelet's plugin directory requires
+// it. Kubernetes documents that requirement, so it is not a choice made here.
+// The plugin is not reachable. It serves one gRPC service on a Unix socket in
+// that directory, it has no network listener, and it never opens the device
+// that it supplies.
 package main
 
 import (
@@ -41,24 +43,25 @@ import (
 )
 
 const (
-	// Extended resource names are vendor-qualified by convention
-	// (nvidia.com/gpu, devic.es/dri), so the prefix should be a domain
-	// whoever ships the plugin actually controls. This one is the host
-	// serving the project's Helm repository.
+	// By convention, an extended resource name carries a vendor prefix
+	// (nvidia.com/gpu, devic.es/dri). That prefix should be a domain that
+	// the publisher of the plugin controls. This one is the host that
+	// serves the project's Helm repository.
 	defaultResourceName = "tschuering.github.io/dev-zfs"
 	defaultDevicePath   = "/dev/zfs"
 	defaultPluginDir    = pluginapi.DevicePluginPath
 	socketName          = "zfs-exporter.sock"
 
-	// Deliberately not pluginapi.KubeletSocket: that constant is the full
-	// path, so joining it onto the plugin directory yields
+	// This is deliberately not pluginapi.KubeletSocket. That constant holds
+	// the full path. A join of that constant onto the plugin directory gives
 	// /var/lib/kubelet/device-plugins/var/lib/kubelet/device-plugins/kubelet.sock
-	// -- which is exactly the bug this replaced. The directory has to stay
+	// which is the bug that this constant replaced. The directory must stay
 	// configurable, so only the file name belongs here.
 	kubeletSocketName = "kubelet.sock"
 
-	// How often the device is re-checked, and how often the kubelet socket is
-	// examined for the replacement that a kubelet restart produces.
+	// pollInterval is how often the plugin examines the device. watchInterval
+	// is how often it examines the kubelet socket for the replacement that a
+	// kubelet restart creates.
 	pollInterval  = 30 * time.Second
 	watchInterval = 5 * time.Second
 )
@@ -71,9 +74,9 @@ type config struct {
 }
 
 func main() {
-	// Before anything that might log: reading the configuration can warn about
-	// a malformed value, and that warning belongs in the same format as every
-	// line after it.
+	// Set this before any code that can log. The configuration read below can
+	// warn about a malformed value, and that warning must use the same format
+	// as every line after it.
 	slog.SetDefault(logging.New(os.Stderr))
 
 	cfg := config{
@@ -89,9 +92,9 @@ func main() {
 	slog.Info("Advertising device",
 		"resource", cfg.resourceName, "device", cfg.devicePath, "count", cfg.count)
 
-	// Registration is not once-and-for-all: a kubelet restart wipes the plugin
-	// directory and every plugin has to come back. serve() returns when that
-	// happens, or on any error, and the loop starts over.
+	// Registration is not permanent. A kubelet restart clears the plugin
+	// directory, and every plugin must register again. serve() returns after a
+	// kubelet restart, and on any error. The loop then repeats.
 	for ctx.Err() == nil {
 		if err := serve(ctx, cfg); err != nil && ctx.Err() == nil {
 			slog.Error("Restarting after failure", "err", err)
@@ -104,8 +107,9 @@ func main() {
 	slog.Info("Shutting down")
 }
 
-// serve publishes the plugin socket, registers with the kubelet, and blocks
-// until the context ends or the kubelet socket is replaced.
+// serve publishes the plugin socket and registers with the kubelet. It then
+// blocks until the context ends, or until something replaces the kubelet
+// socket.
 func serve(ctx context.Context, cfg config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -133,8 +137,9 @@ func serve(ctx context.Context, cfg config) error {
 	}
 	slog.Info("Registered with kubelet", "resource", cfg.resourceName)
 
-	// A kubelet restart recreates kubelet.sock. Watching its identity is
-	// enough to notice, and needs no filesystem-notification dependency.
+	// A kubelet restart creates a new kubelet.sock. A check of the file
+	// identity detects that, and it needs no filesystem-notification
+	// dependency.
 	kubeletSocket := kubeletSocketPath(cfg.pluginDir)
 	id, err := identity(kubeletSocket)
 	if err != nil {
@@ -161,13 +166,13 @@ func serve(ctx context.Context, cfg config) error {
 	}
 }
 
-// register tells the kubelet the socket to call back on and the resource name
-// to advertise.
+// register gives the kubelet the socket to call back on, and the resource
+// name to advertise.
 func register(ctx context.Context, cfg config) error {
 	target := "unix://" + kubeletSocketPath(cfg.pluginDir)
 
-	// A Unix socket on the same filesystem: no transport security to
-	// negotiate, and nothing else can reach it.
+	// This is a Unix socket on the same filesystem. There is no transport
+	// security to negotiate, and nothing else can reach the socket.
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
@@ -195,10 +200,10 @@ func (p *plugin) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*plu
 	return &pluginapi.DevicePluginOptions{}, nil
 }
 
-// ListAndWatch reports the device for as long as the kubelet is listening,
-// pushing an update whenever the device appears or disappears. A node without
-// ZFS reports zero, which is what keeps the exporter from being scheduled
-// there at all.
+// ListAndWatch reports the device while the kubelet listens. It sends an
+// update each time the device appears or disappears. A node without ZFS
+// reports zero devices, which stops the scheduler from placing the exporter on
+// that node.
 func (p *plugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
 	last := -1
 	ticker := time.NewTicker(pollInterval)
@@ -227,9 +232,9 @@ func (p *plugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_
 	}
 }
 
-// Allocate hands the kubelet the device node to inject. This is the only
-// privileged act in the whole design, and it is the kubelet that performs it --
-// the plugin never opens the device itself.
+// Allocate gives the kubelet the device node to insert. This is the only
+// privileged operation in the design, and the kubelet performs it. The plugin
+// never opens the device itself.
 func (p *plugin) Allocate(_ context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
 	if !present(p.cfg.devicePath) {
 		return nil, fmt.Errorf("%s is not present on this node", p.cfg.devicePath)
@@ -241,10 +246,11 @@ func (p *plugin) Allocate(_ context.Context, req *pluginapi.AllocateRequest) (*p
 			Devices: []*pluginapi.DeviceSpec{{
 				HostPath:      p.cfg.devicePath,
 				ContainerPath: p.cfg.devicePath,
-				// libzfs opens /dev/zfs O_RDWR even to list a pool, so read-only
-				// here would fail at open(). What keeps the container from
-				// changing anything is the absence of CAP_SYS_ADMIN, which
-				// OpenZFS checks per ioctl -- not the device mode.
+				// libzfs opens /dev/zfs with O_RDWR even to list a pool, so
+				// a read-only value here would fail at open(). The absence of
+				// CAP_SYS_ADMIN stops the container from changing anything.
+				// OpenZFS checks that capability on each ioctl. The device
+				// mode does not control this.
 				Permissions: "rw",
 			}},
 		})
@@ -267,10 +273,10 @@ func devices(n int) []*pluginapi.Device {
 	return out
 }
 
-// kubeletSocketPath is where the kubelet listens for registrations, and
-// pluginSocketPath is where this plugin listens for the kubelet's calls back.
-// Both are relative to the plugin directory, which moves on distributions that
-// site the kubelet root elsewhere.
+// kubeletSocketPath returns the path where the kubelet listens for
+// registrations. pluginSocketPath returns the path where this plugin listens
+// for calls from the kubelet. Both paths are relative to the plugin directory,
+// which moves on distributions that put the kubelet root elsewhere.
 func kubeletSocketPath(pluginDir string) string {
 	return filepath.Join(pluginDir, kubeletSocketName)
 }
@@ -287,8 +293,8 @@ func present(path string) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-// identity returns something that changes when a file is replaced, which is
-// what a kubelet restart does to its socket.
+// identity returns a value that changes when something replaces the file. A
+// kubelet restart replaces the kubelet socket in this way.
 func identity(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {

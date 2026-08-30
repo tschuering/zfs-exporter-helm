@@ -14,9 +14,9 @@ type: application
 # placeholder.
 version: 0.0.0-dev
 
-# The zfs_exporter release inside the image. Informational: several packaging
-# releases can share one appVersion, which is why it does not name the image
-# tag. hack/update-upstream.sh moves this with the Dockerfile pin.
+# The zfs_exporter release in the image. This value is informational. Several
+# packaging releases can share one appVersion, so it does not name the image
+# tag. hack/update-upstream.sh moves this value with the Dockerfile pin.
 appVersion: "2.4.1"
 
 home: https://github.com/tschuering/zfs-exporter-helm
@@ -30,8 +30,9 @@ keywords:
   - monitoring
   - exporter
 
-# The exporter runs zpool(8)/zfs(8) against the node's kernel module, so it
-# only makes sense on nodes that have one. Nothing here needs a recent API.
+# The exporter runs zpool(8) and zfs(8) against the node's kernel module, so
+# it is useful only on a node that has that module. Nothing here needs a recent
+# API.
 kubeVersion: ">=1.19.0-0"
 
 maintainers:

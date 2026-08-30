@@ -1,22 +1,24 @@
-// Command zfs-shim dispatches zpool(8) and zfs(8) to whichever bundled
-// OpenZFS userland matches the kernel module running on this host.
+// Command zfs-shim runs zpool(8) and zfs(8) from the bundled OpenZFS userland
+// that matches the kernel module on this host.
 //
-// zfs_exporter shells out to bare "zpool" and "zfs", resolved on PATH. This
-// binary is installed on PATH under both names and, when run, reads the host
-// module version out of /sys/module/zfs/version -- visible inside a container
-// without any mount, because module state is not namespaced -- and executes
-// the corresponding tree under /opt/zfs/<major>.<minor>.
+// zfs_exporter runs bare "zpool" and "zfs", which it resolves on PATH. This
+// binary is installed on PATH under both names. At run time it reads the host
+// module version from /sys/module/zfs/version. A container can read that file
+// with no mount, because module state is not namespaced. The shim then
+// executes the matching tree under /opt/zfs/<major>.<minor>.
 //
-// Each tree carries its own loader and libraries, so it is started as
+// Each tree carries its own loader and libraries. The shim therefore starts a
+// tree as
 //
 //	/opt/zfs/2.4/lib/ld-linux-x86-64.so.2 \
 //	    --library-path /opt/zfs/2.4/lib /opt/zfs/2.4/sbin/zpool ...
 //
-// rather than relying on anything installed at a standard path. That is what
-// lets two userlands built against different glibc versions coexist.
+// and it uses nothing installed at a standard path. That is what lets two
+// userlands built against different glibc versions live in one image.
 //
-// Exec, not fork: the shim replaces itself, so the exporter sees the real
-// command's exit status and output with nothing in between.
+// The shim execs the command instead of forking. It replaces itself, so the
+// exporter reads the exit status and the output of the real command
+// directly.
 package main
 
 import (
@@ -36,8 +38,8 @@ import (
 const (
 	treeRoot      = "/opt/zfs"
 	versionSource = "/sys/module/zfs/version"
-	// Overrides the detected version. For testing, and for the case where
-	// /sys is not where we expect it.
+	// Replaces the detected version. It is for tests, and for a node where
+	// /sys is not at the expected path.
 	versionEnv = "ZFS_USERLAND_VERSION"
 )
 
@@ -109,8 +111,9 @@ func detectVersion(source string) (string, error) {
 	return m[1] + "." + m[2], nil
 }
 
-// findLoader returns the tree's own dynamic loader, whose name is
-// architecture-specific (ld-linux-x86-64.so.2, ld-linux-aarch64.so.1, ...).
+// findLoader returns the tree's own dynamic loader. The name of that loader
+// is architecture-specific: ld-linux-x86-64.so.2, ld-linux-aarch64.so.1, and
+// so on.
 func findLoader(tree string) (string, error) {
 	matches, err := filepath.Glob(filepath.Join(tree, "lib", "ld-*.so*"))
 	if err != nil {
@@ -123,7 +126,7 @@ func findLoader(tree string) (string, error) {
 	return matches[0], nil
 }
 
-// available lists the userland versions bundled into this image.
+// available lists the userland versions that this image carries.
 func available(root string) []string {
 	entries, err := os.ReadDir(root)
 	if err != nil {

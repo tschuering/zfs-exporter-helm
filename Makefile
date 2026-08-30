@@ -1,10 +1,11 @@
-# Local equivalents of what CI runs. Nothing here pushes.
+# Local equivalents of the checks that CI runs. Nothing here pushes.
 
 IMAGE ?= zfs-exporter
 TAG   ?= dev
 PLATFORM ?= linux/$(shell uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 CHART := charts/zfs-exporter
-# OpenZFS branches the image bundles, matching the Dockerfile builder stages
+# OpenZFS branches that the image carries. Keep these in step with the builder
+# stages in the Dockerfile.
 ZFS_TREES ?= 2.3 2.4
 
 .PHONY: help build smoke lint chart scan clean
@@ -47,7 +48,7 @@ lint: ## hadolint, shellcheck, yamllint and the standard go checks
 	go tool govulncheck ./...
 	go test -race ./...
 
-chart: ## helm lint plus render and schema-check every ci/ values file
+chart: ## helm lint, then render and schema-check each ci/ values file
 	helm lint $(CHART) --strict
 	@for values in $(CHART)/ci/*.yaml; do \
 		echo "== $$values"; \
@@ -56,7 +57,7 @@ chart: ## helm lint plus render and schema-check every ci/ values file
 				-schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'; \
 	done
 
-scan: build ## Trivy scan, failing on HIGH and CRITICAL
+scan: build ## Trivy scan. Fails on HIGH and CRITICAL
 	trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 $(IMAGE):$(TAG)
 
 clean:

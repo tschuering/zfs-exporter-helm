@@ -1,18 +1,20 @@
 #!/bin/sh
-# Stage a self-contained OpenZFS userland tree: the given binaries into
-# DEST/sbin, and every shared object ldd resolves for them -- the dynamic
-# loader included -- flattened into DEST/lib.
+# Stage a self-contained OpenZFS userland tree. The script copies the given
+# binaries into DEST/sbin. It also copies every shared object that ldd resolves
+# for them, and the dynamic loader, into a flat DEST/lib.
 #
 #   collect-runtime-deps.sh /rootfs/opt/zfs/2.3 /usr/sbin/zpool /usr/sbin/zfs
 #
-# Flat rather than path-preserving because the image carries more than one of
-# these trees, each built against its own glibc. Nothing is installed at a
-# standard path, so nothing collides; cmd/zfs-shim runs a tree by invoking its
-# own loader with --library-path, which is what keeps the two apart.
+# The layout is flat and does not keep the source paths, because the image
+# carries more than one of these trees, and each tree is built against its own
+# glibc. No tree is installed at a standard path, so no file collides.
+# cmd/zfs-shim runs a tree through that tree's own loader with --library-path,
+# which is what keeps the trees apart.
 #
-# Only direct and transitive NEEDED entries are covered. Anything a binary
-# dlopen()s at run time is invisible here -- if a future OpenZFS grows one, it
-# surfaces as a missing-library error when the exporter first shells out.
+# This covers only direct and transitive NEEDED entries. A library that a
+# binary opens with dlopen() at run time is not visible here. If a future
+# OpenZFS adds one, it appears as a missing-library error the first time the
+# exporter runs zpool or zfs.
 set -eu
 
 dest="${1:?usage: collect-runtime-deps.sh DEST BINARY...}"
@@ -32,7 +34,7 @@ for bin in "$@"; do
     done
 done
 
-# The loader has to be there or the tree cannot be started at all.
+# The loader must be present, or nothing can start the tree.
 if ! ls "${dest}"/lib/ld-*.so* >/dev/null 2>&1; then
     echo "no dynamic loader staged into ${dest}/lib" >&2
     exit 1

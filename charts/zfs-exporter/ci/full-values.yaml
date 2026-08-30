@@ -1,6 +1,6 @@
 ---
-# Every optional object switched on, so CI renders the templates that the
-# default install skips.
+# This file enables every optional object, so that CI renders the templates
+# that a default install skips.
 image:
   registry: ghcr.io
   repository: tschuering/zfs-exporter
@@ -22,7 +22,7 @@ networkPolicy:
           kubernetes.io/metadata.name: monitoring
 
 devicePlugin:
-  # Deliberately not the default, so the override path is exercised.
+  # Deliberately not the default, so that CI exercises the override path.
   resourceName: tschuering.github.io/dev-zfs-alt
   kubeletPluginDir: /var/lib/k0s/kubelet/device-plugins
   count: 2

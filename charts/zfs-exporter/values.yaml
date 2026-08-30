@@ -4,12 +4,14 @@
 image:
   registry: ghcr.io
   repository: tschuering/zfs-exporter
-  # Defaults to the chart version, not appVersion: the image and the chart are
-  # cut from the same release tag and carry the same version, whereas
-  # appVersion names the exporter inside the image, which several releases can
-  # share. In a git checkout the version is a placeholder, so a local render
-  # names an image tag that does not exist. Set `digest` instead to pin
-  # reproducibly -- if both are set the digest wins and the tag is ignored.
+  # The default is the chart version, not appVersion. One release tag builds
+  # the image and the chart, and both carry the same version. appVersion names
+  # the exporter in the image, and several releases can share one appVersion.
+  # In a git checkout the chart version is a placeholder, so a local render
+  # names an image tag that does not exist.
+  #
+  # Set `digest` instead for a reproducible pin. If both are set, the digest
+  # applies and the tag is ignored.
   tag: ""
   digest: ""
   pullPolicy: IfNotPresent
@@ -19,40 +21,41 @@ nameOverride: ""
 fullnameOverride: ""
 commonLabels: {}
 
-# An account of its own, despite the exporter never calling the API. A pod
-# always runs as some service account -- leaving this out means "default", not
-# "none" -- and CIS Kubernetes 5.1.5 is precisely "default service accounts
-# should not be actively used". So this exists to satisfy that check, not to
-# hold any permission: the chart grants no RBAC at all.
+# The exporter has its own service account, although it never calls the API.
+# Every pod runs as some service account. An empty setting selects "default",
+# not "none". CIS Kubernetes 5.1.5 states that default service accounts should
+# not be actively used. This account exists to satisfy that check, and it holds
+# no permission. The chart grants no RBAC at all.
 #
 # Set create: false to run under the namespace's default account instead. The
-# token stays off either way.
+# token stays disabled in both cases.
 serviceAccount:
   create: true
   name: ""
   annotations: {}
 
-# Applied to the pod, which is what decides whether a token is projected --
-# the identical field on a ServiceAccount is only a default, and the pod's
-# setting wins over it. Deliberately one setting rather than two: an exporter
-# that reads the node's ZFS state has no use for a Kubernetes credential.
+# This is set on the pod, and the pod setting decides whether Kubernetes
+# projects a token. The same field on a ServiceAccount is only a default, and
+# the pod setting overrides it. There is deliberately one setting and not two:
+# an exporter that reads the node's ZFS state needs no Kubernetes credential.
 automountServiceAccountToken: false
 
 # ---------------------------------------------------------------------------
 # Scheduling
 #
-# The chart ships no nodeSelector: a DaemonSet on a cluster where only some
-# nodes have ZFS should be constrained explicitly, e.g.
+# The chart sets no nodeSelector. On a cluster where only some nodes have ZFS,
+# constrain the DaemonSet explicitly, for example:
 #   nodeSelector:
 #     feature.node.kubernetes.io/storage-zfs: "true"
-# On a node without the ZFS module the pod stays Running and every scrape
-# reports zfs_scrape_collector_success 0, which alerts rather than crashloops.
+# On a node without the ZFS module, the pod stays Running and every scrape
+# reports zfs_scrape_collector_success 0. That raises an alert instead of a
+# crash loop.
 # ---------------------------------------------------------------------------
 nodeSelector: {}
 affinity: {}
 
-# Node-level telemetry is worth keeping on nodes that are cordoned, tainted or
-# under pressure -- those are the nodes you most want pool metrics from.
+# Keep node-level telemetry on nodes that are cordoned, tainted or under
+# pressure. Those are the nodes whose pool metrics matter most.
 tolerations:
   - operator: Exists
 
@@ -66,12 +69,12 @@ updateStrategy:
 # ---------------------------------------------------------------------------
 # Security
 #
-# Root is required, not incidental: /dev/zfs is mode 0600 root:root, so the
-# ioctls behind `zpool list` need DAC ownership. That is the whole privilege
-# the pod holds -- every capability is dropped, the rootfs is read-only,
-# privilege escalation is off and the host's namespaces are not shared. The
-# exporter reads pool and dataset properties; it never mounts, creates or
-# destroys anything.
+# Root is required, not incidental. /dev/zfs is mode 0600 root:root, so the
+# ioctls behind `zpool list` need DAC ownership. That is the only privilege the
+# pod holds. The chart drops every capability, mounts a read-only rootfs,
+# disables privilege escalation, and shares no host namespace. The exporter
+# reads pool and dataset properties. It never mounts, creates or destroys
+# anything.
 # ---------------------------------------------------------------------------
 podSecurityContext:
   runAsUser: 0
@@ -79,15 +82,15 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
-# These are effective precisely because the exporter is not privileged. The
-# device arrives from the device plugin instead, which is the whole reason this
-# chart carries one: `privileged: true` would silently discard the capability
-# drop and the seccomp profile above -- both measured, not assumed.
+# These settings have an effect because the exporter is not privileged. The
+# device comes from the device plugin instead, which is the reason this chart
+# carries one. `privileged: true` would silently discard the capability drop
+# and the seccomp profile above. Both effects are measured, not assumed.
 #
 # With no capabilities, OpenZFS permits the exporter's reads and the kernel
-# refuses everything else: zfs_secpolicy_read requires nothing, while every
-# mutating ioctl goes through secpolicy_sys_config or secpolicy_zfs, which are
-# CAP_SYS_ADMIN or EPERM.
+# refuses every other operation. zfs_secpolicy_read requires no privilege.
+# Every mutating ioctl goes through secpolicy_sys_config or secpolicy_zfs,
+# which are CAP_SYS_ADMIN or EPERM.
 securityContext:
   privileged: false
   allowPrivilegeEscalation: false
@@ -103,35 +106,37 @@ dnsPolicy: ClusterFirst
 # ---------------------------------------------------------------------------
 # Device plugin
 #
-# A container may only open a device the device cgroup permits, and Kubernetes
-# does not add hostPath devices to that allowlist. The two ways through are
-# `privileged: true`, which grants every capability and turns seccomp off, or a
-# device plugin, which lets the kubelet inject the device into an otherwise
-# unprivileged container. This chart takes the second.
+# A container can open only a device that the device cgroup permits, and
+# Kubernetes does not add hostPath devices to that allowlist. Two solutions
+# exist. The first is `privileged: true`, which grants every capability and
+# disables seccomp. The second is a device plugin, which lets the kubelet
+# insert the device into an otherwise unprivileged container. This chart uses
+# the second solution.
 #
-# The plugin is a separate DaemonSet by necessity: the kubelet admits a pod
-# only once the resource it requests exists, so a plugin inside the exporter's
-# own pod could never start.
+# The plugin must be a separate DaemonSet. The kubelet admits a pod only after
+# the resource that the pod requests exists, so a plugin in the exporter's own
+# pod could never start.
 # ---------------------------------------------------------------------------
 devicePlugin:
-  # Advertised resource. The prefix is a vendor domain by convention -- and
-  # this one is the host that serves this chart's own Helm repository, so it
-  # is a domain the project actually controls rather than a plausible-looking
-  # name someone else might own. Distinctive enough that it cannot collide
-  # with another plugin advertising devices on the same node.
+  # The advertised resource. By convention the prefix is a vendor domain. This
+  # prefix is the host that serves this chart's own Helm repository, so it is a
+  # domain that the project controls, and not a name that someone else might
+  # own. It is distinct enough that it cannot collide with another plugin that
+  # advertises devices on the same node.
   resourceName: tschuering.github.io/dev-zfs
 
   devicePath: /dev/zfs
 
-  # Where the kubelet expects plugin sockets. Hardcoded in the kubelet, but
-  # the root moves on some distributions.
+  # The directory where the kubelet expects plugin sockets. The kubelet
+  # hardcodes this path, but the root moves on some distributions.
   kubeletPluginDir: /var/lib/kubelet/device-plugins
 
-  # How many pods may hold the device at once. One DaemonSet pod per node
-  # needs exactly one; raise it if something else will request the resource.
+  # The number of pods that can hold the device at the same time. One
+  # DaemonSet pod per node needs exactly one. Raise the value if something else
+  # requests the resource.
   count: 1
 
-  # Empty by default: system-node-critical is the natural choice for a node
+  # Empty by default. system-node-critical is the usual choice for a node
   # component, but some clusters restrict those classes to kube-system.
   priorityClassName: ""
 
@@ -144,15 +149,17 @@ devicePlugin:
     limits:
       memory: 64Mi
 
-# The image bundles an OpenZFS userland for each supported branch and picks
-# the one matching the node at run time, by reading /sys/module/zfs/version --
-# which needs no mount, since module state is not namespaced. Nodes on
-# different branches are handled by the same DaemonSet, and upgrading a node
-# across branches needs no change here.
+# The image carries an OpenZFS userland for each supported branch. At run time
+# it selects the userland that matches the node, and it reads
+# /sys/module/zfs/version to do so. That file needs no mount, because module
+# state is not namespaced. One DaemonSet therefore serves nodes on different
+# branches, and an upgrade of a node from one branch to the other needs no
+# change here.
 #
-# Set this only to override that detection, e.g. "2.4" to force a branch on a
-# node where /sys is not where the shim expects it. Wrong values produce a
-# clear startup error naming what the image carries.
+# Set this value only to replace that detection, for example "2.4" to force a
+# branch on a node where /sys is not at the path the shim expects. A wrong
+# value produces a clear startup error that names the branches the image
+# carries.
 zfsUserlandVersion: ""
 
 # ---------------------------------------------------------------------------
@@ -160,7 +167,7 @@ zfsUserlandVersion: ""
 # ---------------------------------------------------------------------------
 listenPort: 9134
 
-# Flags appended to the container command, e.g.
+# Flags added to the container command, for example:
 #   extraArgs:
 #     - --collector.dataset-snapshot
 #     - --pool=rpool
@@ -170,9 +177,9 @@ extraEnv: []
 extraVolumes: []
 extraVolumeMounts: []
 
-# Modest by design: the work is forking zpool/zfs and parsing their output.
-# The limit is what keeps a pathological `zfs get` on a pool with very many
-# datasets from competing with the workloads being measured.
+# These values are small by design. The work is to fork zpool and zfs, and to
+# parse their output. The limit stops an extreme `zfs get` on a pool with very
+# many datasets from competing with the workloads that the exporter measures.
 resources:
   requests:
     cpu: 20m
@@ -180,8 +187,8 @@ resources:
   limits:
     memory: 128Mi
 
-# "/" is the exporter-toolkit landing page and the only endpoint that answers
-# outside /metrics -- there is no /-/healthy on this exporter.
+# "/" is the exporter-toolkit landing page. It is the only endpoint outside
+# /metrics that answers. This exporter has no /-/healthy endpoint.
 livenessProbe:
   httpGet:
     path: /
@@ -213,8 +220,8 @@ service:
   annotations: {}
   labels: {}
 
-# For Prometheus Operator. Off by default: the CRD may not exist, and helm
-# would fail the install rather than skip the object.
+# For the Prometheus Operator. Disabled by default, because the CRD can be
+# absent. Helm would then fail the install instead of skipping the object.
 serviceMonitor:
   enabled: false
   # Defaults to the release namespace.
@@ -225,21 +232,23 @@ serviceMonitor:
   annotations: {}
   relabelings: []
   metricRelabelings: []
-  # A DaemonSet's metrics are per node, so carry the node name onto them.
+  # A DaemonSet reports metrics per node, so copy the node name onto them.
   honorLabels: false
 
-# Alternative to a ServiceMonitor for agents that discover by annotation
-# (Alloy, the Prometheus kubernetes_sd annotation convention).
+# An alternative to a ServiceMonitor, for agents that discover by annotation
+# (Alloy, and the Prometheus kubernetes_sd annotation convention).
 prometheusAnnotations:
   enabled: false
 
-# Off by default. A NetworkPolicy does nothing unless the cluster's CNI
-# enforces them, and one that silently has no effect is worse than none --
-# it reads as protection. On a cluster that does enforce them, a policy naming
-# the wrong source is how you discover your scraper can no longer reach this.
+# Disabled by default. A NetworkPolicy has an effect only if the cluster's CNI
+# enforces policies. A policy with no effect is worse than no policy, because a
+# reader sees it as protection. On a cluster that does enforce policies, a
+# policy that names the wrong source stops your scraper from reaching this
+# exporter.
 networkPolicy:
   enabled: false
-  # Selectors for whatever scrapes this, e.g. the Prometheus or Alloy pod.
-  # Empty renders a policy that allows the metrics port from anywhere and
-  # denies every other port -- a narrowing, not a restriction on who connects.
+  # Selectors for whatever scrapes this exporter, for example the Prometheus
+  # or Alloy pod. An empty list renders a policy that permits the metrics port
+  # from anywhere and denies every other port. That limits the ports, not the
+  # clients.
   ingressFrom: []

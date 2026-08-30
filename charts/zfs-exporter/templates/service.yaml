@@ -16,10 +16,11 @@ metadata:
   {{- end }}
 spec:
   type: {{ .Values.service.type }}
-  # A DaemonSet's metrics differ per node, so the pods must be addressable
-  # individually rather than load-balanced across: a ClusterIP that picked one
-  # pod per scrape would report a different node's pools each time. Endpoint
-  # discovery (ServiceMonitor, Alloy's role=endpoints) reads every address.
+  # A DaemonSet reports different metrics on each node, so a client must
+  # address each pod separately and not through a load balancer. A ClusterIP
+  # that selected one pod per scrape would report a different node's pools each
+  # time. Endpoint discovery (ServiceMonitor, or Alloy role=endpoints) reads
+  # every address.
   clusterIP: {{ if eq .Values.service.type "ClusterIP" }}None{{ else }}""{{ end }}
   selector:
     {{- include "zfs-exporter.selectorLabels" . | nindent 4 }}
