@@ -150,27 +150,6 @@ jobs:
             echo "::endgroup::"
           done
 
-      # The chart version has to move whenever the chart does, or a consumer
-      # pinning a version silently gets different templates.
-      - name: chart version bumped
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          git fetch --depth=1 origin "${{ github.base_ref }}"
-          if git diff --quiet "origin/${{ github.base_ref }}" -- charts/; then
-            echo "chart untouched, nothing to check"
-            exit 0
-          fi
-          chart=charts/zfs-exporter/Chart.yaml
-          base="origin/${{ github.base_ref }}"
-          before="$(git show "${base}:${chart}" | awk '/^version:/ { print $2 }')"
-          after="$(awk '/^version:/ { print $2 }' "${chart}")"
-          if [ "${before}" = "${after}" ]; then
-            echo "::error::charts/ changed but Chart.yaml version is ${after}"
-            exit 1
-          fi
-          echo "chart version ${before} -> ${after}"
-
   image:
     runs-on: ubuntu-latest
     permissions:

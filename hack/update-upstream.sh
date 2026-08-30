@@ -51,4 +51,4 @@ echo "pinned zfs_exporter ${version}:"
 printf '  %s\n' "${lines[@]}"
 echo
 echo "Chart.yaml appVersion and the Dockerfile ARG were updated too."
-echo "Bump the chart's own version by hand -- it is not the exporter's."
+echo "The chart's own version comes from the git tag. This script leaves it alone."
