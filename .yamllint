@@ -1,8 +1,8 @@
 ---
 
-# Lint config for this repo. Helm templates are not YAML until they are
-# rendered, so they are excluded here and covered by `helm lint` plus the
-# render-and-schema-check step in CI instead.
+# The lint configuration for this repository. A Helm template is not YAML
+# until helm renders it, so this file excludes the templates. `helm lint` and
+# the render-and-schema-check step in CI cover them instead.
 
 extends: default
 

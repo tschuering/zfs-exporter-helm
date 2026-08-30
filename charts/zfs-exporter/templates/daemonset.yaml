@@ -87,13 +87,13 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          # requests and limits are emitted separately so the device can be
-          # merged into limits -- an extended resource has to be a limit, and
-          # toYaml of the whole block would emit `limits` a second time.
+          # requests and limits are rendered separately, so that the device
+          # can merge into limits. An extended resource must be a limit, and
+          # toYaml of the whole block would render `limits` a second time.
           #
-          # Requesting it is also what keeps this pod off nodes without ZFS:
-          # the plugin advertises the resource only where the device exists,
-          # so the scheduler will not place it anywhere else.
+          # The request also keeps this pod off nodes without ZFS. The plugin
+          # advertises the resource only where the device exists, so the
+          # scheduler places the pod nowhere else.
           resources:
             {{- with .Values.resources.requests }}
             requests:

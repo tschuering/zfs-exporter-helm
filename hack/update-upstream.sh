@@ -3,11 +3,11 @@
 #
 #   hack/update-upstream.sh 2.4.2
 #
-# Downloads each supported architecture's archive, hashes it here, rewrites
-# checksums.txt and the Dockerfile's ZFS_EXPORTER_VERSION default. The digests
-# come from the bytes actually fetched rather than from the release's own
-# sha256sums.txt, so what lands in the diff is something this script saw --
-# review it against upstream before merging.
+# The script downloads the archive for each supported architecture and hashes
+# it locally. It then rewrites checksums.txt and the default of the Dockerfile
+# ARG ZFS_EXPORTER_VERSION. Each digest comes from the bytes that this script
+# fetched, and not from the release's own sha256sums.txt. The diff therefore
+# shows what this script read. Compare it with upstream before you merge.
 set -Eeuo pipefail
 
 readonly ARCHES=(amd64 arm64)

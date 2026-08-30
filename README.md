@@ -1,89 +1,93 @@
 # zfs-exporter
 
-A container image and Helm chart for [pdf/zfs_exporter][upstream] — per-dataset
-and per-pool OpenZFS metrics for Prometheus.
+A container image and Helm chart for [pdf/zfs_exporter][upstream]. The exporter
+reports per-dataset and per-pool OpenZFS metrics to Prometheus.
 
-Upstream publishes release binaries but no image and no chart. This repository
-packages them: a distroless image carrying only the exporter and the OpenZFS
-userland it shells out to, and a DaemonSet chart that gives it the one piece of
-host access it needs.
+Upstream publishes release binaries, but no image and no chart. This repository
+supplies both. The image is distroless and carries only the exporter and the
+OpenZFS userland that the exporter runs. The chart deploys a DaemonSet and
+gives the exporter the one piece of host access that it needs.
 
 [upstream]: https://github.com/pdf/zfs_exporter
 
 ## Motivation
 
 I wanted to run this exporter the way I already run node_exporter: as a
-DaemonSet, deployed from the same place as everything else, and to keep the
-Ubuntu host underneath as thin as I could.
+DaemonSet, deployed from the same place as everything else. I also wanted to
+keep the Ubuntu host below it as thin as possible.
 
-Everything else on my node had already moved into Kubernetes. The ZFS exporter
-was the one piece of monitoring still installed on the host — a binary in
-`/usr/local/bin`, a systemd unit, a version pin and a checksum, all carried by
-configuration management, all needing their own review and their own upgrade
-path. One exporter's worth of host state, kept alive for one exporter.
+Everything else on my node moved into Kubernetes first. The ZFS exporter was
+the last part of the monitoring stack that stayed on the host. It needed a
+binary in `/usr/local/bin`, a systemd unit, a version pin and a checksum.
+Configuration management carried all four, and each one needed its own review
+and its own upgrade path. That is a set of host state for one exporter.
 
-That is a poor trade. A host that runs a kernel, ZFS and a kubelet is a host I
-can rebuild without thinking. Every package and unit added on top is something
-to patch, something that drifts, and something that has to be reproduced the
-next time the machine is reinstalled. Moving the exporter into the cluster puts
-it under the same deployment, rollback and upgrade story as every other
-workload, and takes the last service off the host.
+That is a poor trade. I can rebuild a host that runs only a kernel, ZFS and a
+kubelet. Each package and unit above that layer is one more thing to patch, one
+more thing that drifts, and one more thing to recreate when the machine is
+reinstalled. In the cluster, the exporter gets the same deployment, rollback
+and upgrade path as every other workload. It also removes the last service from
+the host.
 
-It stayed on the host longer than everything else for a concrete reason:
-upstream publishes no image and no chart, and unlike node_exporter this
-exporter needs the OpenZFS userland present next to it. That is the gap this
-repository fills.
+It stayed on the host longer than everything else for one concrete reason.
+Upstream publishes no image and no chart, and this exporter needs the OpenZFS
+userland next to it, which node_exporter does not. This repository fills that
+gap.
 
 ## Why an image is not trivial
 
-`zfs_exporter` does not read `/proc/spl/kstat` the way node_exporter's ZFS
-collector does. It runs `zpool(8)` and `zfs(8)` and parses their output:
+`zfs_exporter` does not read `/proc/spl/kstat`, which is what node_exporter's
+ZFS collector does. It runs `zpool(8)` and `zfs(8)`, and it parses their
+output:
 
 ```go
 exec.Command(`zpool`, `get`, `-Hpo`, `name,property,value`, ...)
 exec.Command(`zfs`,   `get`, `-Hprt`, ...)
 ```
 
-So the image has to carry the OpenZFS userland, and that userland talks to the
-**host's** kernel module through `/dev/zfs`.
+The image must therefore carry the OpenZFS userland. That userland communicates
+with the **host's** kernel module through `/dev/zfs`.
 
 ## Host compatibility
 
-**OpenZFS 2.3.x and 2.4.x, from the same tag.** The image bundles a userland
-for each branch and chooses at run time, so a fleet running both is served by
-one DaemonSet and upgrading a node across branches needs no change here.
+**OpenZFS 2.3.x and 2.4.x, from the same tag.** The image carries a userland
+for each branch and selects one at run time. One DaemonSet therefore serves a
+fleet that runs both branches, and an upgrade of a node from one branch to the
+other needs no change here.
 
-`cmd/zfs-shim` is installed on `PATH` as `zpool` and `zfs` — the names the
-exporter execs. It reads the node's branch from `/sys/module/zfs/version`,
-which a container can read with no mount at all because module state is not
-namespaced, and starts the matching tree:
+`cmd/zfs-shim` is installed on `PATH` under two names, `zpool` and `zfs`. These
+are the names that the exporter executes. The shim reads the node's branch from
+`/sys/module/zfs/version`. A container can read that file with no mount,
+because module state is not namespaced. The shim then starts the matching tree:
 
 ```
 /opt/zfs/2.4/lib/ld-linux-x86-64.so.2 \
     --library-path /opt/zfs/2.4/lib /opt/zfs/2.4/sbin/zpool ...
 ```
 
-Each tree carries its own libraries **and its own dynamic loader**, which is
-what lets two userlands built against different glibc coexist — 2.3 links
-`libzfs.so.6`, 2.4 links `libzfs.so.7`, and neither is installed at a standard
-path. Nothing is guessed: a node on a branch the image does not carry gets
+Each tree carries its own libraries **and its own dynamic loader**. Two
+userlands built against different glibc versions can therefore live in one
+image. 2.3 links `libzfs.so.6` and 2.4 links `libzfs.so.7`, and neither is
+installed at a standard path. Nothing is guessed. A node on a branch that the
+image does not carry gets this message:
 
 ```
 zfs-shim: no bundled OpenZFS userland for host version 2.5; this image carries 2.3, 2.4
 ```
 
-rather than a confusing ioctl failure. `zfsUserlandVersion` in the chart
-overrides the detection.
+It does not get an unclear ioctl failure. `zfsUserlandVersion` in the chart
+replaces the detection.
 
-Adding a branch is a builder stage and a base image — see the `zfs23` and
-`zfs24` stages in the [Dockerfile](Dockerfile). Each stage asserts the branch
-the base actually shipped, so a base image that moves to a new OpenZFS fails
-the build instead of quietly changing what the image supports.
+To add a branch, add a builder stage and a base image. See the `zfs23` and
+`zfs24` stages in the [Dockerfile](Dockerfile). Each stage checks the branch
+that its base image supplied. A base image that moves to a new OpenZFS branch
+therefore fails the build. It does not silently change which branches the image
+supports.
 
 ## What is in the image
 
-On `gcr.io/distroless/base-debian13` — no shell, no package manager, no apt
-state:
+The base is `gcr.io/distroless/base-debian13`. It has no shell, no package
+manager and no apt state.
 
 | Path | Source |
 | --- | --- |
@@ -92,21 +96,21 @@ state:
 | `/opt/zfs/2.3/` | Debian trixie `zfsutils-linux`, with its libraries and loader |
 | `/opt/zfs/2.4/` | Debian forky `zfsutils-linux`, likewise |
 
-Around 84 MB. Both `linux/amd64` and `linux/arm64`.
+The image is about 84 MB. It is built for `linux/amd64` and `linux/arm64`.
 
-The exporter binary is verified against digests kept in this repository rather
-than the `sha256sums.txt` served next to the release. A sums file in the same
-directory as the artifact shares its trust root — anyone able to replace one
-can replace the other — so pinning it here is what makes the digest reviewable
-in a diff. `hack/update-upstream.sh` regenerates both by downloading and
-hashing each archive.
+The build verifies the exporter binary against digests held in this repository.
+It does not use the `sha256sums.txt` that upstream serves next to the release.
+A sums file in the same directory as the artifact shares the trust root of that
+artifact, and anyone who can replace one file can replace the other. A digest
+held here is reviewable in a diff instead. `hack/update-upstream.sh` downloads
+and hashes each archive, and rewrites the digest for each architecture.
 
 ## Security posture
 
 The exporter is **not privileged** and holds **no capabilities**. It reads pool
 and dataset properties, and the kernel refuses it anything else.
 
-That is not a statement of intent — it is how OpenZFS gates its own ioctls:
+That is not a statement of intent. It is how OpenZFS controls its own ioctls:
 
 ```c
 zfs_secpolicy_read(...)  { return (0); }                            // stats: no privilege
@@ -114,25 +118,27 @@ secpolicy_sys_config(cr) { return priv_policy(cr, CAP_SYS_ADMIN, EPERM); }
 secpolicy_zfs(cr)        { return priv_policy(cr, CAP_SYS_ADMIN, EACCES); }
 ```
 
-Everything the exporter runs — `zpool list`, `zpool get`, `zfs get` — is
-registered with `zfs_secpolicy_read`. Every mutating path goes through the
-other two. With no capabilities, reads succeed and `zfs destroy` returns
-`permission denied` from the kernel, not from a check in this repository.
+The exporter runs `zpool list`, `zpool get` and `zfs get`. OpenZFS registers
+all three with `zfs_secpolicy_read`. Every ioctl that changes state uses one of
+the other two functions. With no capabilities, the reads succeed and
+`zfs destroy` returns `permission denied`. The kernel returns that error. No
+check in this repository produces it.
 
-So the exporter runs with `privileged: false`, `capabilities.drop: [ALL]`,
-`seccompProfile: RuntimeDefault`, `readOnlyRootFilesystem: true`, no host
-namespaces, **no host mounts at all**, and no service account token.
+The exporter therefore runs with `privileged: false`,
+`capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`,
+`readOnlyRootFilesystem: true`, no host namespaces, **no host mounts at all**,
+and no service account token.
 
 ### Why the device plugin exists
 
-A container may only open a device the device cgroup permits, and Kubernetes
-does not add hostPath devices to that allowlist. Mounting `/dev/zfs` with
-`hostPath` is not enough — the open fails with `Failed to initialize the libzfs
-library` regardless of file ownership.
+A container can open only a device that the device cgroup permits, and
+Kubernetes does not add hostPath devices to that allowlist. A `hostPath` mount
+of `/dev/zfs` is therefore not sufficient. The open fails with `Failed to
+initialize the libzfs library`, whatever the file ownership is.
 
-The only two ways through are `privileged: true` or a device plugin. And
-`privileged: true` is all-or-nothing: it grants the full capability set and
-disables seccomp, **discarding the settings above**.
+Two solutions exist: `privileged: true`, or a device plugin. `privileged: true`
+is all or nothing. It grants the full capability set and disables seccomp, and
+it **discards the settings above**.
 
 | | `privileged: true` | device plugin |
 | --- | --- | --- |
@@ -140,36 +146,37 @@ disables seccomp, **discarding the settings above**.
 | Seccomp | disabled | `RuntimeDefault` active |
 | `zfs destroy` | permitted by the kernel | `EPERM` |
 
-So the chart ships one (`cmd/zfs-device-plugin`), which lets the kubelet inject
-`/dev/zfs` into an unprivileged container. The plugin itself is privileged —
-the kubelet's plugin directory
-[requires it](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/)
-— but it has no network listener, talks only to the kubelet over a Unix socket,
-and never opens the device it hands out. It is its own DaemonSet because the
-kubelet admits a pod only once the resource it requests is registered, so a
-plugin inside the exporter's pod could never start.
+The chart therefore includes a device plugin (`cmd/zfs-device-plugin`). It lets
+the kubelet insert `/dev/zfs` into an unprivileged container. The plugin itself
+is privileged, because the kubelet's plugin directory
+[requires it](https://kubernetes.io/docs/concepts/extend-kubernetes/compute-storage-net/device-plugins/).
+But the plugin has no network listener. It communicates only with the kubelet
+over a Unix socket, and it never opens the device that it supplies. The plugin
+is a separate DaemonSet, because the kubelet admits a pod only after the
+resource that the pod requests is registered. A plugin in the exporter's own
+pod could therefore never start.
 
-Be clear about what this buys: the node still runs one privileged pod. What
-changes is that it is no longer the component with an HTTP listener, a
+Be clear about what this gives you. The node still runs one privileged pod. The
+change is that this pod is no longer the component with an HTTP listener, a
 third-party binary and known CVEs.
 
 ### A side effect worth having
 
-The plugin advertises nothing on a node without `/dev/zfs`, so the exporter is
-never scheduled there — no `nodeSelector` to maintain, and no pod left
-`Running` while every collector fails.
+On a node without `/dev/zfs`, the plugin advertises no resource. The scheduler
+therefore never places the exporter there. You maintain no `nodeSelector`, and
+no pod stays `Running` while every collector fails.
 
 ### Scanner findings
 
-A scan of the image reports nothing in the OS layer and a set of Go advisories
-in the exporter binary itself, which is upstream's release built with an older
-toolchain. Those are accepted, not fixed: rebuilding from source to clear them
-would make this something other than a packaging of the upstream release. CI
-blocks on the OS layer and reports the rest to the Security tab. See
-[SECURITY.md](SECURITY.md).
+A scan of the image reports no finding in the OS layer. It reports a set of Go
+advisories in the exporter binary, which is upstream's release built with an
+older toolchain. These advisories are accepted, not fixed. A rebuild from
+source would clear them, but it would also make this image something other than
+a packaging of the upstream release. CI fails on findings in the OS layer, and
+reports the other findings to the Security tab. See [SECURITY.md](SECURITY.md).
 
-Releases are signed with [cosign][] keyless, and carry an SPDX SBOM and build
-provenance as attestations:
+Cosign signs each release keylessly. Each release also carries an SPDX SBOM and
+build provenance as attestations:
 
 ```console
 $ cosign verify ghcr.io/tschuering/zfs-exporter:0.1.0 \
@@ -181,8 +188,8 @@ $ cosign verify ghcr.io/tschuering/zfs-exporter:0.1.0 \
 
 ## Versions and tags
 
-One git tag cuts both the image and the chart, and they carry the same version.
-A release tagged `v0.1.0` publishes:
+One git tag builds both the image and the chart, and both carry the same
+version. A release tagged `v0.1.0` publishes:
 
 | Artifact | Tag | Moves? |
 | --- | --- | --- |
@@ -191,17 +198,18 @@ A release tagged `v0.1.0` publishes:
 | image | `latest` | yes |
 | chart | `0.1.0` | no |
 
-Each tag also creates a GitHub release carrying the generated changelog, the
-packaged chart as a `.tgz`, and the SBOM as a file — for anyone who would
-rather not go through a registry client.
+Each tag also creates a GitHub release. That release carries the generated
+changelog, the packaged chart as a `.tgz`, and the SBOM as a file. This is for
+anyone who prefers not to use a registry client.
 
-There is deliberately **no `2.4.1` image tag**. That number is the exporter's,
-and it is the one thing that cannot distinguish two of our releases: packaging
-the same upstream version twice can still mean a different base image, a
-different ZFS userland or a security rebuild. `appVersion` in the chart records
-which exporter is inside; the version you deploy is ours.
+There is deliberately **no `2.4.1` image tag**. That number belongs to the
+exporter, and it is the one number that cannot separate two releases of this
+packaging. Two releases can package the same upstream version and still differ
+in base image, ZFS userland or a security rebuild. `appVersion` in the chart
+records which exporter is in the image. The version you deploy is this
+project's own.
 
-For a rollout that cannot move under you, set `image.digest`.
+Set `image.digest` for a rollout that cannot change under you.
 
 ## Install
 
@@ -213,9 +221,9 @@ $ helm install zfs-exporter oci://ghcr.io/tschuering/charts/zfs-exporter \
     --create-namespace
 ```
 
-Or as a classic Helm repository, if that suits your tooling better. Both serve
-the same chart — the repository index points at the tarballs attached to the
-GitHub releases:
+A classic Helm repository is also available, if it suits your tooling better.
+Both paths serve the same chart. The repository index points at the tarballs
+attached to the GitHub releases:
 
 ```console
 $ helm repo add zfs-exporter https://tschuering.github.io/zfs-exporter-helm
@@ -225,13 +233,13 @@ $ helm install zfs-exporter zfs-exporter/zfs-exporter \
     --create-namespace
 ```
 
-On a cluster where only some nodes have ZFS, nothing needs constraining: the
-plugin advertises the resource only where `/dev/zfs` exists, so the exporter is
-never scheduled anywhere else.
+On a cluster where only some nodes have ZFS, you constrain nothing. The plugin
+advertises the resource only where `/dev/zfs` exists. The scheduler therefore
+places the exporter only on those nodes.
 
 ### Scraping
 
-Two options, neither on by default:
+Two options are available. Neither is enabled by default:
 
 ```yaml
 # Prometheus Operator
@@ -248,14 +256,14 @@ prometheusAnnotations:
   enabled: true
 ```
 
-The Service is headless on purpose. A DaemonSet's metrics differ per node, so a
-load-balanced ClusterIP would report a different node's pools on every scrape.
-Endpoint discovery reads every pod address instead.
+The Service is headless on purpose. A DaemonSet reports different metrics on
+each node. A load-balanced ClusterIP would therefore report a different node's
+pools on each scrape. Endpoint discovery reads every pod address instead.
 
 ### Restricting who may scrape
 
-The metrics expose pool layout, dataset names and capacities, so the endpoint
-is worth treating as sensitive. The chart can ship a `NetworkPolicy`, **off by
+The metrics show pool layout, dataset names and capacities. Treat the endpoint
+as sensitive. The chart can render a `NetworkPolicy`, which is **disabled by
 default**:
 
 ```yaml
@@ -267,25 +275,27 @@ networkPolicy:
           kubernetes.io/metadata.name: monitoring
 ```
 
-It is off by default for two reasons. A `NetworkPolicy` does nothing unless the
-cluster's CNI enforces them — several do not, and a policy that silently has no
-effect is worse than none, because it reads as protection. And on a cluster
-that *does* enforce them, a policy naming the wrong source is how you find out
-your scraper can no longer reach the exporter.
+It is disabled by default for two reasons:
 
-Note what an empty `ingressFrom` means: the rendered policy allows the metrics
-port **from anywhere**, and denies every other port. That is a narrowing, not a
-restriction on who may connect. Set `ingressFrom` to whatever actually scrapes
-this — otherwise enabling it buys very little.
+1. A `NetworkPolicy` has an effect only if the cluster's CNI enforces policies.
+   Several CNIs do not. A policy with no effect is worse than no policy,
+   because a reader sees it as protection.
+2. On a cluster that *does* enforce policies, a policy that names the wrong
+   source stops your scraper from reaching the exporter.
+
+Note what an empty `ingressFrom` does. The rendered policy permits the metrics
+port **from anywhere**, and denies every other port. That limits the ports, not
+the clients. Set `ingressFrom` to whatever actually scrapes this exporter.
+Without that, the policy gives you very little.
 
 ### Values
 
-See [`charts/zfs-exporter/values.yaml`](charts/zfs-exporter/values.yaml); every
-key is commented. The ones most often changed:
+See [`charts/zfs-exporter/values.yaml`](charts/zfs-exporter/values.yaml). Every
+key has a comment. These are the keys that change most often:
 
 | Key | Default | |
 | --- | --- | --- |
-| `image.digest` | `""` | pin here for reproducible rollouts; wins over `tag` |
+| `image.digest` | `""` | pin here for reproducible rollouts. Overrides `tag` |
 | `extraArgs` | `[]` | e.g. `--collector.dataset-snapshot`, `--pool=rpool` |
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
 | `networkPolicy.enabled` | `false` | see [Restricting who may scrape](#restricting-who-may-scrape) |
@@ -295,8 +305,8 @@ key is commented. The ones most often changed:
 
 ## Alerting
 
-The exporter answers `200` whether or not it could read anything, so a
-successful scrape is not a working exporter. Alert on the collector instead:
+The exporter answers `200` even if it read nothing. A successful scrape is
+therefore not proof of a working exporter. Alert on the collector instead:
 
 ```yaml
 - alert: ZFSExporterCollectorFailing
@@ -304,8 +314,9 @@ successful scrape is not a working exporter. Alert on the collector instead:
   for: 15m
 ```
 
-A node without the ZFS module keeps the pod `Running` and every collector at
-`0` — deliberately, so it alerts rather than crash-looping.
+On a node without the ZFS module, the pod stays `Running` and every collector
+reports `0`. That is deliberate. The pod raises an alert instead of a crash
+loop.
 
 ## Development
 
@@ -317,23 +328,24 @@ $ make chart     # helm lint, render, kubeconform
 $ make scan      # trivy, failing on HIGH and CRITICAL
 ```
 
-Moving to a new upstream release:
+To move to a new upstream release:
 
 ```console
 $ hack/update-upstream.sh 2.4.2
 ```
 
-That downloads each architecture's archive, hashes it locally, and rewrites
-`checksums.txt`, the Dockerfile `ARG` and the chart's `appVersion`. Review the
-digests against upstream before merging. Renovate can raise the version bump
-but cannot compute the digests, so a bump that skips this script fails the
-build rather than shipping something unverified.
+The script downloads the archive for each architecture and hashes it locally.
+It then rewrites `checksums.txt`, the Dockerfile `ARG` and the chart's
+`appVersion`. Compare the digests with upstream before you merge. Renovate can
+raise the version bump, but it cannot compute the digests. A bump that skips
+this script therefore fails the build, instead of publishing something
+unverified.
 
 ## Licensing
 
 This packaging is MIT (see [LICENSE](LICENSE)).
 
-It builds an image containing software under other licences:
+It builds an image that contains software under other licences:
 
 - `zfs_exporter` — MIT, © the upstream authors
 - OpenZFS userland (`zpool`, `zfs`, `libzfs`) — CDDL-1.0

@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// The shim decides which bundled OpenZFS userland runs against the host's
-// kernel module. Getting that wrong does not fail loudly -- it runs a 2.3
-// zpool against a 2.4 module, or the other way round, and the failure surfaces
-// as an ioctl error that reads like a ZFS problem rather than a parsing one.
-// So the parsing is worth pinning down.
+// The shim selects the bundled OpenZFS userland that runs against the host's
+// kernel module. A wrong selection does not fail loudly. It runs a 2.3 zpool
+// against a 2.4 module, or a 2.4 zpool against a 2.3 module. The failure then
+// appears as an ioctl error, which reads like a ZFS problem and not like a
+// parsing problem. These tests therefore pin down the parsing.
 func TestDetectVersionFromFile(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -52,9 +52,9 @@ func TestDetectVersionFromFile(t *testing.T) {
 	}
 }
 
-// A node without the module is the ordinary case on a mixed cluster, and on
-// every CI runner. It has to say so in terms someone can act on, rather than
-// failing somewhere deeper.
+// A node without the module is the normal case on a mixed cluster, and on
+// every CI runner. The shim must report that in terms a reader can act on. It
+// must not fail at a deeper level instead.
 func TestDetectVersionMissingFile(t *testing.T) {
 	_, err := detectVersion(filepath.Join(t.TempDir(), "absent"))
 	if err == nil {
@@ -66,8 +66,8 @@ func TestDetectVersionMissingFile(t *testing.T) {
 }
 
 func TestDetectVersionEnvOverrides(t *testing.T) {
-	// The override exists for nodes where /sys is not where the shim expects,
-	// and for exercising a tree that is not the host's.
+	// The override is for nodes where /sys is not at the path the shim
+	// expects. It also lets a test run a tree other than the host's.
 	source := filepath.Join(t.TempDir(), "version")
 	if err := os.WriteFile(source, []byte("2.3.2-2\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -88,8 +88,8 @@ func TestDetectVersionEnvOverrides(t *testing.T) {
 	}
 }
 
-// The error a user sees when their branch is not bundled names what is, so
-// listing has to reflect the trees actually present.
+// The error for an unbundled branch names the branches that the image does
+// carry. The list must therefore show the trees that are present.
 func TestAvailable(t *testing.T) {
 	root := t.TempDir()
 	for _, d := range []string{"2.4", "2.3"} {
@@ -112,9 +112,9 @@ func TestAvailable(t *testing.T) {
 	}
 }
 
-// Each tree carries its own loader, whose name is architecture-specific. The
-// glob is what makes the shim work on both amd64 and arm64 without knowing
-// which it is on.
+// Each tree carries its own loader, and the name of that loader is
+// architecture-specific. The glob is what lets the shim run on amd64 and on
+// arm64 without knowledge of the architecture.
 func TestFindLoader(t *testing.T) {
 	for _, loader := range []string{"ld-linux-x86-64.so.2", "ld-linux-aarch64.so.1"} {
 		t.Run(loader, func(t *testing.T) {

@@ -7,9 +7,10 @@ import (
 	"testing"
 )
 
-// The format is not ours to choose freely -- it is what every other exporter
-// in the namespace emits, and a pipeline parsing those should not need a
-// second rule for these binaries. So pin the shape, not just "it logs".
+// This project does not choose the format freely. Every other exporter in the
+// namespace writes this format, and a pipeline that parses those lines should
+// not need a second rule for these binaries. This test therefore pins the
+// format, not only the fact that the code logs.
 //
 //	time=2026-08-30T03:25:11.210Z level=INFO source=zfs_exporter.go:76 msg="Enabling collectors" collectors="..."
 var wantShape = regexp.MustCompile(
@@ -30,8 +31,8 @@ func TestFormatMatchesTheExporters(t *testing.T) {
 	}
 }
 
-// UTC to the millisecond, with a literal Z. slog's default is local time with
-// a numeric offset, which is the thing being corrected here.
+// The time is UTC to the millisecond, with a literal Z. The default in slog is
+// local time with a numeric offset, which this package corrects.
 func TestTimeIsUTCMilliseconds(t *testing.T) {
 	var buf bytes.Buffer
 	New(&buf).Info("x")
@@ -45,8 +46,8 @@ func TestTimeIsUTCMilliseconds(t *testing.T) {
 	}
 }
 
-// slog reports the absolute path of the source file, which is the build
-// machine's layout and useless to a reader.
+// slog reports the absolute path of the source file. That path is the layout
+// of the build machine, and a reader cannot use it.
 func TestSourceIsBareFileName(t *testing.T) {
 	var buf bytes.Buffer
 	New(&buf).Error("boom")

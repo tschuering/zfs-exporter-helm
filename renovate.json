@@ -6,14 +6,14 @@
   ],
   "packageRules": [
     {
-      "description": "Base images are pinned by digest in the Dockerfile ARGs",
+      "description": "The Dockerfile ARGs pin each base image by digest",
       "matchManagers": ["dockerfile"],
       "pinDigests": true
     }
   ],
   "customManagers": [
     {
-      "description": "The upstream zfs_exporter release. Renovate can move the version, but not the per-architecture digests in checksums.txt -- run hack/update-upstream.sh to regenerate those, or the build fails closed on a checksum mismatch rather than installing something unreviewed",
+      "description": "The upstream zfs_exporter release. Renovate can move the version, but it cannot move the per-architecture digests in checksums.txt. Run hack/update-upstream.sh to rewrite those digests. Without that step the build fails on a checksum mismatch, and it installs nothing unreviewed",
       "customType": "regex",
       "managerFilePatterns": ["/^Dockerfile$/"],
       "matchStrings": [
@@ -21,7 +21,7 @@
       ]
     },
     {
-      "description": "kubeconform pinned in the CI workflow",
+      "description": "The kubeconform version pinned in the CI workflow",
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
       "matchStrings": [

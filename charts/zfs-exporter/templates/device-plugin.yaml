@@ -1,15 +1,17 @@
 ---
-# Advertises the node's /dev/zfs to the kubelet so the exporter can be granted
-# the device without running privileged.
+# This DaemonSet advertises the node's /dev/zfs to the kubelet. The kubelet can
+# then give the device to the exporter, and the exporter does not run
+# privileged.
 #
-# This has to be its own DaemonSet, not a container alongside the exporter: the
-# kubelet only admits a pod once the resource it requests is registered, so a
-# plugin sharing that pod could never start -- the pod would wait on itself.
+# The plugin must be its own DaemonSet, and not a container next to the
+# exporter. The kubelet admits a pod only after the resource that the pod
+# requests is registered, so a plugin in that same pod could never start. The
+# pod would wait for itself.
 #
-# It is privileged because the kubelet's plugin directory requires it, which
-# Kubernetes documents rather than leaves to choice. It has no network
-# listener, talks only to the kubelet over a Unix socket, and never opens the
-# device it hands out.
+# The plugin is privileged, because the kubelet's plugin directory requires it.
+# Kubernetes documents that requirement, so it is not a choice made here. The
+# plugin has no network listener. It communicates only with the kubelet over a
+# Unix socket, and it never opens the device that it supplies.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -45,8 +47,8 @@ spec:
       {{- with .Values.devicePlugin.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
-      # Runs everywhere and reports zero devices where there is no ZFS, which
-      # is what keeps the exporter off those nodes without a nodeSelector.
+      # The plugin runs on every node. It reports zero devices where there is
+      # no ZFS, which keeps the exporter off those nodes with no nodeSelector.
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
@@ -71,18 +73,19 @@ spec:
           resources:
             {{- toYaml .Values.devicePlugin.resources | nindent 12 }}
           securityContext:
-            # Not a preference. The kubelet's plugin directory is documented as
-            # requiring a privileged security context, and privileged in
-            # Kubernetes is all-or-nothing: it grants every capability and
-            # disables seccomp regardless of what else is set here. Setting
-            # capabilities or a seccomp profile alongside it would read as a
-            # restriction while doing nothing, so neither is set.
+            # This is not a preference. Kubernetes documents that the
+            # kubelet's plugin directory requires a privileged security
+            # context. privileged is all or nothing: it grants every capability
+            # and disables seccomp, whatever else this block sets. A capability
+            # list or a seccomp profile here would read as a restriction and do
+            # nothing, so this block sets neither.
             privileged: true
             readOnlyRootFilesystem: true
           volumeMounts:
             - name: kubelet-plugins
               mountPath: {{ .Values.devicePlugin.kubeletPluginDir }}
-            # Only ever stat()ed, to decide whether to advertise anything.
+            # The plugin only calls stat() on this path, to decide whether to
+            # advertise a device.
             - name: dev-zfs
               mountPath: {{ .Values.devicePlugin.devicePath }}
               readOnly: true
