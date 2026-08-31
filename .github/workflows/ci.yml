@@ -201,8 +201,8 @@ jobs:
           # under an unchanged tag, so a version pin alone is not enough.
           # Move the version and the digest together.
           # renovate: datasource=github-releases depName=yannh/kubeconform
-          kubeconform_version=v0.7.0
-          kubeconform_sha256=c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3
+          kubeconform_version=v0.8.0
+          kubeconform_sha256=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
           curl -fsSL --retry 3 --retry-all-errors -o /tmp/kubeconform.tar.gz \
             "https://github.com/yannh/kubeconform/releases/download/${kubeconform_version}/kubeconform-linux-amd64.tar.gz"
           echo "${kubeconform_sha256}  /tmp/kubeconform.tar.gz" | sha256sum -c
