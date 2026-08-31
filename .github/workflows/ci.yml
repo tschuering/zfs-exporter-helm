@@ -17,6 +17,13 @@ on:
 permissions:
   contents: read
 
+# An explicit bash shell runs each step with -o pipefail. The default shell is
+# bash without pipefail, and there a failure at the head of a pipeline does
+# not stop a step.
+defaults:
+  run:
+    shell: bash
+
 env:
   # The OpenZFS branches that the image carries a userland for. Keep these in
   # step with the builder stages in the Dockerfile.
@@ -41,9 +48,21 @@ jobs:
       - name: shellcheck
         run: shellcheck hack/*.sh
 
+      # actionlint checks the workflow files, and it runs shellcheck on each
+      # run block. The step above covers the hack/ scripts, and this step
+      # covers the inline shell. The Go module proxy verifies the pinned
+      # version against the public checksum database.
+      - name: actionlint
+        run: |
+          # renovate: datasource=github-releases depName=rhysd/actionlint
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+      # The version is pinned, so a new yamllint release cannot turn CI red
+      # without a diff. Renovate moves it.
       - name: yamllint
         run: |
-          pipx install yamllint
+          # renovate: datasource=pypi depName=yamllint
+          pipx install yamllint==1.38.0
           yamllint --strict .
 
   shim:
@@ -55,14 +74,26 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Everything here is the standard toolchain. There is no third-party linter.
+      # Almost everything here is the standard toolchain. The one third-party
+      # linter is golangci-lint, in its own step. .golangci.yml selects
+      # its linters and gives the reason for each exception.
 
       # -s in addition to the default. It reports constructs that the language
       # has a shorter form for. That is the half of gofmt that changes how the
       # code reads, and not only where the spaces go.
+      #
+      # go list gives gofmt the package directories, and not ".". gofmt walks
+      # a directory tree literally. Thus "." also reads the Go files that the
+      # vendored agent skills carry under .agents/. The go tool skips
+      # dot-directories, so this list stays correct when a package comes or
+      # goes.
+      #
+      # xargs -r starts nothing when the list is empty, and pipefail makes a
+      # go list failure stop the step. Without both, gofmt reads stdin, finds
+      # nothing, and the step passes with no check done.
       - name: gofmt
         run: |
-          unformatted="$(gofmt -s -l ./cmd)"
+          unformatted="$(go list -f '{{.Dir}}' ./... | xargs -r gofmt -s -l)"
           if [ -n "${unformatted}" ]; then
             echo "::error::gofmt -s needed: ${unformatted}"
             exit 1
@@ -71,6 +102,19 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      # golangci-lint carries the staticcheck analyzers and gosec, so this one
+      # step covers general static analysis and security static analysis.
+      # govulncheck below stays separate, because it scans dependencies and
+      # not this code. The action is pinned to a commit SHA like the other
+      # actions. The tool version is pinned through the input below, so a new
+      # golangci-lint release cannot turn CI red without a diff. Renovate
+      # moves both pins.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # renovate: datasource=github-releases depName=golangci/golangci-lint
+          version: v2.13.2
+
       # go.mod and go.sum drift silently. A dependency that is added and later
       # removed leaves entries behind, and no other step of the build reports
       # them. -diff shows the difference and rewrites nothing, so CI fails
@@ -78,7 +122,7 @@ jobs:
       - name: modules are tidy
         run: go mod tidy -diff
 
-      # This compares the module cache with the hashes in go.sum. It therefore
+      # This compares the module cache with the hashes in go.sum. Thus it
       # catches a dependency whose content changed under an unchanged version.
       - name: modules verify
         run: go mod verify
@@ -86,13 +130,33 @@ jobs:
       # -race, because the plugin is concurrent. A gRPC server, the
       # ListAndWatch stream, the supervisor loop and a ticker all run at the
       # same time, and the tests exercise the stream.
+      #
+      # -shuffle=on randomizes the test order, so a dependence between tests
+      # fails here and not on some later unrelated change. The coverage
+      # profile falls out of the same run, so the floor check below costs no
+      # extra test time.
       - name: test
-        run: go test -race ./...
+        run: go test -race -shuffle=on -coverprofile=cover.out ./...
+
+      # The floor guards the level that the unit tests reached. It is a
+      # regression guard, and not a target to chase: a drop below the floor
+      # means that tests went missing. The comparison runs in awk, because
+      # the shell cannot compare decimal numbers. An empty total also fails
+      # the comparison, so a parse problem cannot pass silently.
+      - name: coverage floor
+        run: |
+          floor="75.0"
+          total="$(go tool cover -func=cover.out | awk '/^total:/ { sub(/%/, "", $3); print $3 }')"
+          echo "statement coverage: ${total}% (floor: ${floor}%)"
+          if ! awk -v total="${total}" -v floor="${floor}" 'BEGIN { exit !(total >= floor) }'; then
+            echo "::error::statement coverage ${total}% is below the floor of ${floor}%"
+            exit 1
+          fi
 
       # This checks reachability, not presence. trivy lists every advisory in
       # the module graph. govulncheck reports only the advisories that reach a
-      # function this code calls, and it prints the call path. A finding here
-      # is therefore something to act on, and not something to triage. That is
+      # function this code calls, and it prints the call path. Thus a finding
+      # here is something to act on, and not something to triage. That is
       # why this step blocks.
       #
       # The version is pinned through the tool directive in go.mod, so a
@@ -132,8 +196,17 @@ jobs:
       - name: render and schema-check
         run: |
           set -euo pipefail
-          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin kubeconform
+
+          # The digest pins the exact bytes. A release asset can be replaced
+          # under an unchanged tag, so a version pin alone is not enough.
+          # Move the version and the digest together.
+          # renovate: datasource=github-releases depName=yannh/kubeconform
+          kubeconform_version=v0.8.0
+          kubeconform_sha256=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+          curl -fsSL --retry 3 --retry-all-errors -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${kubeconform_version}/kubeconform-linux-amd64.tar.gz"
+          echo "${kubeconform_sha256}  /tmp/kubeconform.tar.gz" | sha256sum -c
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
 
           # CRD schemas for the kinds that the chart renders and that core
           # Kubernetes does not define
@@ -200,7 +273,8 @@ jobs:
 
           docker run --rm zfs-exporter:ci --version
 
-          for tree in ${ZFS_TREES}; do
+          read -ra trees <<< "${ZFS_TREES}"
+          for tree in "${trees[@]}"; do
             for bin in zpool zfs; do
               out="$(docker run --rm --entrypoint "${bin}" \
                        -e "ZFS_USERLAND_VERSION=${tree}" \
@@ -231,10 +305,20 @@ jobs:
           esac
 
           docker run -d --name smoke -p 9134:9134 zfs-exporter:ci
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:9134/metrics -o /tmp/metrics; then break; fi
+          up=""
+          for _ in {1..30}; do
+            if curl -fsS http://127.0.0.1:9134/metrics -o /tmp/metrics; then up=1; break; fi
             sleep 1
           done
+          # The logs are printed before the container goes away. Without them
+          # this failure reads as a missing /tmp/metrics, which points at the
+          # wrong place.
+          if [ -z "${up}" ]; then
+            echo "::error::/metrics gave no answer in 30 seconds"
+            docker logs smoke
+            docker rm -f smoke >/dev/null
+            exit 1
+          fi
           docker rm -f smoke >/dev/null
 
           grep -q '^zfs_exporter_build_info' /tmp/metrics
@@ -253,12 +337,12 @@ jobs:
       #
       # The OS layer belongs to this repository. The base image digest and the
       # two packages installed above it decide its content, so this repository
-      # can fix a HIGH finding there. That scan therefore blocks.
+      # can fix a HIGH finding there. Thus that scan blocks.
       #
       # The exporter binary does not belong to this repository. Upstream
       # publishes prebuilt release binaries, and this image packages exactly
       # those bytes. That provenance is the point, and a rebuild from source to
-      # clear findings would discard it. Upstream currently builds with an
+      # clear findings discards it. Upstream currently builds with an
       # older Go toolchain, so the binary carries stdlib and x/* advisories
       # that no change here can correct. This workflow reports those findings
       # to the Security tab and records them as accepted risk (see
@@ -285,9 +369,9 @@ jobs:
 
       # A public repository ingests SARIF into code scanning at no cost. A
       # private repository needs GitHub Advanced Security. Without that, the
-      # upload fails instead of being skipped, and every run would turn red for
-      # a reason unrelated to the code. This step is therefore skipped while
-      # the repository is private. It starts to work when the repository
+      # upload fails instead of skipping, and every run turns red for a reason
+      # unrelated to the code. Thus this step does not run while the
+      # repository is private. It starts to work when the repository
       # becomes public.
       #
       # The scan above runs in both cases, so nothing goes unexamined. The

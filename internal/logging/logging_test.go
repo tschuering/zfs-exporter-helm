@@ -18,9 +18,12 @@ var wantShape = regexp.MustCompile(
 		`level=INFO ` +
 		`source=logging_test\.go:\d+ ` +
 		`msg="Enabling collectors" ` +
-		`collectors="dataset-filesystem, dataset-volume, pool"\n$`)
+		`collectors="dataset-filesystem, dataset-volume, pool"\n$`,
+)
 
 func TestFormatMatchesTheExporters(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	New(&buf).Info("Enabling collectors",
 		"collectors", "dataset-filesystem, dataset-volume, pool")
@@ -34,36 +37,51 @@ func TestFormatMatchesTheExporters(t *testing.T) {
 // The time is UTC to the millisecond, with a literal Z. The default in slog is
 // local time with a numeric offset, which this package corrects.
 func TestTimeIsUTCMilliseconds(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	New(&buf).Info("x")
 
-	field := strings.SplitN(buf.String(), " ", 2)[0]
+	field, _, _ := strings.Cut(buf.String(), " ")
 	if !strings.HasSuffix(field, "Z") {
 		t.Errorf("time is not UTC: %s", field)
 	}
-	if got := len(strings.SplitN(field, ".", 2)[1]); got != 4 { // "210Z"
-		t.Errorf("time has %d digits after the dot, want milliseconds: %s", got-1, field)
+
+	_, fraction, ok := strings.Cut(field, ".")
+	if !ok {
+		t.Fatalf("time carries no fractional second: %s", field)
+	}
+
+	if len(fraction) != 4 { // "210Z"
+		t.Errorf("time has %d digits after the dot, want milliseconds: %s",
+			len(fraction)-1, field)
 	}
 }
 
 // slog reports the absolute path of the source file. That path is the layout
 // of the build machine, and a reader cannot use it.
 func TestSourceIsBareFileName(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	New(&buf).Error("boom")
 
-	for _, field := range strings.Fields(buf.String()) {
+	for field := range strings.FieldsSeq(buf.String()) {
 		if strings.HasPrefix(field, "source=") {
 			if strings.Contains(field, "/") {
-				t.Errorf("source should be a bare file name, got %s", field)
+				t.Errorf("source must be a bare file name, got %s", field)
 			}
+
 			return
 		}
 	}
-	t.Fatal("no source= field; AddSource should be on")
+
+	t.Fatal("no source= field. AddSource must be on")
 }
 
 func TestLevelsAreNamed(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		log  func(*bytes.Buffer)
 		want string
@@ -74,6 +92,7 @@ func TestLevelsAreNamed(t *testing.T) {
 	} {
 		var buf bytes.Buffer
 		tc.log(&buf)
+
 		if !strings.Contains(buf.String(), tc.want) {
 			t.Errorf("want %s in %q", tc.want, buf.String())
 		}

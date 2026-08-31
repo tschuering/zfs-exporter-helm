@@ -32,13 +32,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/tschuering/zfs-exporter-helm/internal/logging"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 )
 
@@ -59,18 +62,27 @@ const (
 	// configurable, so only the file name belongs here.
 	kubeletSocketName = "kubelet.sock"
 
-	// pollInterval is how often the plugin examines the device. watchInterval
-	// is how often it examines the kubelet socket for the replacement that a
-	// kubelet restart creates.
-	pollInterval  = 30 * time.Second
-	watchInterval = 5 * time.Second
+	// pollInterval is how often the plugin examines the device.
+	// defaultWatchInterval is how often it examines the kubelet socket for
+	// the replacement that a kubelet restart creates. The watch interval
+	// travels in the configuration, so that tests can shorten the wait.
+	pollInterval         = 30 * time.Second
+	defaultWatchInterval = 5 * time.Second
+
+	// An upper bound on DEVICE_COUNT. The count decides how many replicas the
+	// scheduler can place on this node, and a node runs one exporter. Thus the
+	// bound is far above any real value. The bound exists because the count
+	// sizes an allocation. Without this bound, a mistyped DEVICE_COUNT
+	// exhausts the memory of the pod, and the program reports no error.
+	maxDeviceCount = 1024
 )
 
 type config struct {
-	resourceName string
-	devicePath   string
-	pluginDir    string
-	count        int
+	resourceName  string
+	devicePath    string
+	pluginDir     string
+	count         int
+	watchInterval time.Duration
 }
 
 func main() {
@@ -80,10 +92,11 @@ func main() {
 	slog.SetDefault(logging.New(os.Stderr))
 
 	cfg := config{
-		resourceName: env("RESOURCE_NAME", defaultResourceName),
-		devicePath:   env("DEVICE_PATH", defaultDevicePath),
-		pluginDir:    env("PLUGIN_DIR", defaultPluginDir),
-		count:        envInt("DEVICE_COUNT", 1),
+		resourceName:  env("RESOURCE_NAME", defaultResourceName),
+		devicePath:    env("DEVICE_PATH", defaultDevicePath),
+		pluginDir:     env("PLUGIN_DIR", defaultPluginDir),
+		count:         envInt("DEVICE_COUNT", 1),
+		watchInterval: defaultWatchInterval,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -98,12 +111,14 @@ func main() {
 	for ctx.Err() == nil {
 		if err := serve(ctx, cfg); err != nil && ctx.Err() == nil {
 			slog.Error("Restarting after failure", "err", err)
+
 			select {
 			case <-ctx.Done():
-			case <-time.After(watchInterval):
+			case <-time.After(cfg.watchInterval):
 			}
 		}
 	}
+
 	slog.Info("Shutting down")
 }
 
@@ -119,35 +134,42 @@ func serve(ctx context.Context, cfg config) error {
 		return fmt.Errorf("clearing stale socket: %w", err)
 	}
 
-	listener, err := net.Listen("unix", socket)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", socket)
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", socket, err)
 	}
-	defer listener.Close()
+	// grpc.Server.Serve closes the listener itself, so this Close reports
+	// "use of closed network connection" on the normal path. This Close is
+	// here for the paths that return before Serve runs.
+	defer func() { _ = listener.Close() }()
 
 	server := grpc.NewServer()
 	pluginapi.RegisterDevicePluginServer(server, &plugin{cfg: cfg, ctx: ctx})
 
 	errs := make(chan error, 1)
 	go func() { errs <- server.Serve(listener) }()
+
 	defer server.Stop()
 
 	if err := register(ctx, cfg); err != nil {
 		return fmt.Errorf("registering with kubelet: %w", err)
 	}
+
 	slog.Info("Registered with kubelet", "resource", cfg.resourceName)
 
 	// A kubelet restart creates a new kubelet.sock. A check of the file
 	// identity detects that, and it needs no filesystem-notification
 	// dependency.
 	kubeletSocket := kubeletSocketPath(cfg.pluginDir)
+
 	id, err := identity(kubeletSocket)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", kubeletSocket, err)
 	}
 
-	ticker := time.NewTicker(watchInterval)
+	ticker := time.NewTicker(cfg.watchInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -159,6 +181,7 @@ func serve(ctx context.Context, cfg config) error {
 			if err != nil {
 				return fmt.Errorf("kubelet socket gone: %w", err)
 			}
+
 			if current != id {
 				return errors.New("kubelet restarted")
 			}
@@ -177,7 +200,7 @@ func register(ctx context.Context, cfg config) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	call, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -187,12 +210,17 @@ func register(ctx context.Context, cfg config) error {
 		Endpoint:     socketName,
 		ResourceName: cfg.resourceName,
 	})
+
 	return err
 }
 
 type plugin struct {
 	pluginapi.UnimplementedDevicePluginServer
 	cfg config
+	// The context of the serve() call that owns this plugin. The gRPC
+	// handlers run on streams that outlive a kubelet restart, and this field
+	// is what lets serve() stop them.
+	//nolint:containedctx // the field bridges the serve() lifecycle into the handlers
 	ctx context.Context
 }
 
@@ -206,6 +234,7 @@ func (p *plugin) GetDevicePluginOptions(context.Context, *pluginapi.Empty) (*plu
 // that node.
 func (p *plugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_ListAndWatchServer) error {
 	last := -1
+
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -214,10 +243,12 @@ func (p *plugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_
 		if present(p.cfg.devicePath) {
 			healthy = p.cfg.count
 		}
+
 		if healthy != last {
 			if err := stream.Send(&pluginapi.ListAndWatchResponse{Devices: devices(healthy)}); err != nil {
 				return err
 			}
+
 			slog.Info("Reporting devices", "count", healthy)
 			last = healthy
 		}
@@ -237,7 +268,12 @@ func (p *plugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.DevicePlugin_
 // never opens the device itself.
 func (p *plugin) Allocate(_ context.Context, req *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
 	if !present(p.cfg.devicePath) {
-		return nil, fmt.Errorf("%s is not present on this node", p.cfg.devicePath)
+		// A bare error reaches the kubelet as codes.Unknown. That code says
+		// nothing about whether another attempt is worthwhile. The device
+		// appears as soon as the module loads, so this condition is
+		// Unavailable and not Internal.
+		return nil, status.Errorf(codes.Unavailable,
+			"%s is not present on this node", p.cfg.devicePath)
 	}
 
 	resp := &pluginapi.AllocateResponse{}
@@ -255,6 +291,7 @@ func (p *plugin) Allocate(_ context.Context, req *pluginapi.AllocateRequest) (*p
 			}},
 		})
 	}
+
 	return resp, nil
 }
 
@@ -270,6 +307,7 @@ func devices(n int) []*pluginapi.Device {
 			Health: pluginapi.Healthy,
 		})
 	}
+
 	return out
 }
 
@@ -290,6 +328,7 @@ func present(path string) bool {
 	if err != nil {
 		return false
 	}
+
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
@@ -300,10 +339,12 @@ func identity(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	sys, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return info.ModTime().String(), nil
 	}
+
 	return fmt.Sprintf("%d:%d", sys.Dev, sys.Ino), nil
 }
 
@@ -311,6 +352,7 @@ func env(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
+
 	return fallback
 }
 
@@ -319,11 +361,18 @@ func envInt(key string, fallback int) int {
 	if v == "" {
 		return fallback
 	}
-	var n int
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 1 {
-		slog.Warn("Ignoring malformed value, want a positive integer",
-			"variable", key, "value", v)
+	// strconv.Atoi, and not fmt.Sscanf("%d"). Sscanf stops at the first
+	// character that it cannot use, and reports no error. Thus "12abc" becomes
+	// 12, and "2.9" becomes 2. A value that nobody wrote is worse than the
+	// fallback here, because this count decides how many pods the scheduler
+	// can place on the node.
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > maxDeviceCount {
+		slog.Warn("The value is not a whole number from 1 to the maximum, the fallback applies",
+			"variable", key, "value", v, "maximum", maxDeviceCount)
+
 		return fallback
 	}
+
 	return n
 }

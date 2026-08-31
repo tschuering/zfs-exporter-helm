@@ -27,6 +27,13 @@ on:
 permissions:
   contents: read
 
+# An explicit bash shell runs each step with -o pipefail. The default shell is
+# bash without pipefail, and there a failure at the head of a pipeline does
+# not stop a step.
+defaults:
+  run:
+    shell: bash
+
 env:
   REGISTRY: ghcr.io
   # This is not ${{ github.repository }}. The repository is named for the
@@ -40,7 +47,7 @@ jobs:
     permissions:
       contents: read
       # These permissions push to GHCR, and they let cosign create a
-      # short-lived OIDC identity. This repository therefore holds no signing
+      # short-lived OIDC identity. Thus this repository holds no signing
       # key.
       packages: write
       id-token: write
@@ -53,9 +60,14 @@ jobs:
       # later and reads as something else: `helm package --version` rejects a
       # branch name as invalid semver, and the image build gets an empty tag
       # list.
+      # The ref goes through the environment, not through ${{ }} in the
+      # script. A ref name can contain $ and parentheses, and text that the
+      # runner splices into the script runs as code.
       - name: refuse a non-tag ref
+        env:
+          REF: ${{ github.ref }}
         run: |
-          case "${{ github.ref }}" in
+          case "${REF}" in
             refs/tags/v*) ;;
             *) echo "::error::release runs on a v* tag only"; exit 1 ;;
           esac
@@ -80,7 +92,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # The version comes from the packaging release, not from the
-          # exporter in it. A tag with the upstream version would be ambiguous.
+          # exporter in it. A tag with the upstream version is ambiguous.
           # Two releases that package zfs_exporter 2.4.1 can differ in base
           # image, ZFS userland and patches, and the upstream number cannot
           # express any of that.
@@ -103,8 +115,8 @@ jobs:
           sbom: true
 
       # cosign signs the digest, not the tag. Someone can move a tag onto
-      # other bytes after the signature is made. The signature would then say
-      # nothing about what a consumer pulls.
+      # other bytes after the sign step. The signature then says nothing
+      # about what a consumer pulls.
       - name: sign
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -180,12 +192,19 @@ jobs:
           # passes --version. A call without it publishes the placeholder.
           helm package charts/zfs-exporter --version "${TAG#v}" \
             --destination /tmp/chart
-          package="$(ls /tmp/chart/*.tgz)"
+          packages=(/tmp/chart/*.tgz)
+          if [ "${#packages[@]}" -ne 1 ] || [ ! -f "${packages[0]}" ]; then
+            echo "::error::expected one chart package in /tmp/chart, got: ${packages[*]}"
+            exit 1
+          fi
+          package="${packages[0]}"
 
-          # helm prints "Pushed:" and "Digest:" on stdout, not on stderr. This
-          # step therefore captures both streams and writes them to the log.
-          helm push "${package}" "oci://${REGISTRY}/${OWNER}/charts" > /tmp/push.log 2>&1
-          cat /tmp/push.log
+          # helm prints "Pushed:" and "Digest:" on stdout, not on stderr. tee
+          # writes both streams to the log and still shows them when the push
+          # fails. A redirection into a file hides the error, because
+          # set -e stops the step before a later cat.
+          helm push "${package}" "oci://${REGISTRY}/${OWNER}/charts" 2>&1 \
+            | tee /tmp/push.log
 
           digest="$(awk '/^Digest:/ { print $2 }' /tmp/push.log)"
           if [ -z "${digest}" ]; then
@@ -198,7 +217,9 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: sign chart
-        run: cosign sign --yes "${{ steps.push.outputs.ref }}"
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+        run: cosign sign --yes "${REF}"
 
   # A push to a registry leaves nothing on the repository page. This job is
   # the part that a person reads. It shows what changed, and it attaches files
@@ -239,7 +260,12 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
-          chart="$(ls /tmp/chart/*.tgz)"
+          charts=(/tmp/chart/*.tgz)
+          if [ "${#charts[@]}" -ne 1 ] || [ ! -f "${charts[0]}" ]; then
+            echo "::error::expected one chart package in /tmp/chart, got: ${charts[*]}"
+            exit 1
+          fi
+          chart="${charts[0]}"
 
           # The notes are generated in a separate call, and not with
           # --generate-notes, so that the artifact table can stand above the
@@ -254,7 +280,7 @@ jobs:
             echo '| --- | --- |'
             echo "| image | \`${IMAGE}:${version}\` |"
             echo "| digest | \`${DIGEST}\` |"
-            echo "| chart | \`oci://${{ env.REGISTRY }}/${OWNER}/charts/zfs-exporter\` |"
+            echo "| chart | \`oci://${REGISTRY}/${OWNER}/charts/zfs-exporter\` |"
             echo
             echo "Both are signed with keyless cosign. The image carries an SPDX"
             echo "SBOM and build provenance as attestations."
@@ -313,16 +339,32 @@ jobs:
           # Merge onto the published index, so that previous versions remain.
           # The published index is absent on the first release, which is the
           # only time the branch does not yet exist.
-          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
-            git fetch --depth 1 origin gh-pages
-            git show origin/gh-pages:index.yaml > /tmp/old-index.yaml
-            helm repo index /tmp/idx \
-              --url "https://github.com/${REPO}/releases/download/${TAG}" \
-              --merge /tmp/old-index.yaml
-          else
-            helm repo index /tmp/idx \
-              --url "https://github.com/${REPO}/releases/download/${TAG}"
-          fi
+          #
+          # The exit code decides which case this is. ls-remote exits with 2
+          # when the branch is absent, and with another nonzero code on a
+          # network or auth failure. That failure must stop the job. If that
+          # failure takes the first-release path, the force-push at the end
+          # replaces the published index with one that lists only this
+          # release.
+          rc=0
+          git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1 || rc=$?
+          case "${rc}" in
+            0)
+              git fetch --depth 1 origin gh-pages
+              git show origin/gh-pages:index.yaml > /tmp/old-index.yaml
+              helm repo index /tmp/idx \
+                --url "https://github.com/${REPO}/releases/download/${TAG}" \
+                --merge /tmp/old-index.yaml
+              ;;
+            2)
+              helm repo index /tmp/idx \
+                --url "https://github.com/${REPO}/releases/download/${TAG}"
+              ;;
+            *)
+              echo "::error::git ls-remote failed with status ${rc}"
+              exit 1
+              ;;
+          esac
 
           echo "== index.yaml =="
           cat /tmp/idx/index.yaml

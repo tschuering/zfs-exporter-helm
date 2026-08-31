@@ -50,5 +50,6 @@ func replace(_ []string, a slog.Attr) slog.Attr {
 			a.Value = slog.StringValue(fmt.Sprintf("%s:%d", filepath.Base(s.File), s.Line))
 		}
 	}
+
 	return a
 }

@@ -21,15 +21,14 @@
       ]
     },
     {
-      "description": "The kubeconform version pinned in the CI workflow",
+      "description": "The kubeconform version pinned in the CI workflow. The workflow builds the download URL from this variable, so the match must read the assignment and not the URL. Renovate cannot move the sha256 next to it; move the digest by hand from the CHECKSUMS asset of the release",
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/ci\\.yml$/"],
       "matchStrings": [
-        "yannh/kubeconform/releases/download/v(?<currentValue>[0-9.]+)/"
+        "kubeconform_version=(?<currentValue>v[0-9.]+)"
       ],
       "datasourceTemplate": "github-releases",
-      "depNameTemplate": "yannh/kubeconform",
-      "extractVersionTemplate": "^v(?<version>.+)$"
+      "depNameTemplate": "yannh/kubeconform"
     }
   ]
 }

@@ -26,7 +26,12 @@ for bin in "$@"; do
     test -x "${bin}" || { echo "not executable: ${bin}" >&2; exit 1; }
     install -m 0755 "${bin}" "${dest}/sbin/$(basename "${bin}")"
 
-    ldd "${bin}" | awk '{ for (i = 1; i <= NF; i++) if (substr($i, 1, 1) == "/") print $i }' \
+    # ldd runs at the head of a pipeline, and this shell has no pipefail. A
+    # capture into a variable first is what makes an ldd failure stop the
+    # script.
+    deps="$(ldd "${bin}")" || { echo "ldd failed for ${bin}" >&2; exit 1; }
+    printf '%s\n' "${deps}" \
+    | awk '{ for (i = 1; i <= NF; i++) if (substr($i, 1, 1) == "/") print $i }' \
     | sort -u \
     | while read -r lib; do
         test -e "${dest}/lib/$(basename "${lib}")" \

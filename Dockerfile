@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # zfs_exporter runs zpool(8) and zfs(8). It does not read /proc/spl/kstat,
-# which is what node_exporter's ZFS collector does. The image must therefore
+# which is what node_exporter's ZFS collector does. Thus the image must
 # carry the OpenZFS userland, and that userland communicates with the host's
 # kernel module through /dev/zfs ioctls.
 #
@@ -9,9 +9,9 @@
 # carries both supported OpenZFS branches and selects one at run time.
 # cmd/zfs-shim reads /sys/module/zfs/version, which a container can read with
 # no mount, because module state is not namespaced. The shim then executes the
-# matching tree. One tag therefore serves a host that runs 2.3.x and a host
-# that runs 2.4.x, and an upgrade of a host from one branch to the other needs
-# no change here.
+# matching tree. Thus one tag serves a host that runs 2.3.x and a host that
+# runs 2.4.x. An upgrade of a host from one branch to the other needs no
+# change here.
 #
 # Each tree is self-contained. It holds its own zpool, zfs, libraries and
 # dynamic loader, under /opt/zfs/<major>.<minor>. That is what lets two
@@ -35,9 +35,9 @@ COPY hack/collect-runtime-deps.sh /usr/local/bin/collect-runtime-deps.sh
 # the CDDL/GPL incompatibility, and the slim image enables only main.
 #
 # DL3008: the package version is deliberately not pinned. The digest-pinned
-# base image is what fixes the OpenZFS branch here, and the check below fails
-# the build if that base moves to a different branch. A pinned package version
-# would break as soon as Debian publishes a security update, because the
+# base image is what fixes the OpenZFS branch here. The check that follows
+# fails the build if that base moves to a different branch. A pinned package
+# version breaks as soon as Debian publishes a security update, because the
 # archive removes superseded versions.
 # hadolint ignore=DL3008
 RUN set -eu; \
@@ -93,8 +93,8 @@ COPY internal ./internal
 # that is present. They are stripped, because there is nothing to debug in
 # production.
 #
-# The symlinks are made here, because the final stage has no shell to make them
-# in.
+# This stage makes the symlinks, because the final stage has no shell to make
+# them in.
 RUN set -eu; \
     CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' \
         -o /out/usr/local/bin/zfs-shim ./cmd/zfs-shim; \
@@ -111,21 +111,22 @@ ARG TARGETARCH
 ARG ZFS_EXPORTER_VERSION=2.4.1
 
 # hadolint ignore=DL3008
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    rm -rf /var/lib/apt/lists/*
 
-# checksums.txt is reviewed in a git diff. It is not fetched from the release
-# that it verifies. A sums file served from the same directory as the artifact
-# shares the trust root of that artifact, so anyone who can replace one file
-# can replace the other. hack/update-upstream.sh rewrites this file.
+# We review checksums.txt in a git diff. We do not fetch it from the release
+# that it verifies. A sums file from the same directory as the artifact shares
+# the trust root of that artifact. Anyone who can replace one file can replace
+# the other. hack/update-upstream.sh rewrites this file.
 COPY checksums.txt /tmp/checksums.txt
 
 RUN set -eu; \
     archive="zfs_exporter-${ZFS_EXPORTER_VERSION}.linux-${TARGETARCH}.tar.gz"; \
     expected="$(awk -v a="${archive}" '$2 == a { print $1 }' /tmp/checksums.txt)"; \
     test -n "${expected}" || { echo "no digest for ${archive} in checksums.txt" >&2; exit 1; }; \
-    curl -fsSL --retry 3 -o /tmp/zfs_exporter.tar.gz \
+    curl -fsSL --retry 3 --retry-all-errors -o /tmp/zfs_exporter.tar.gz \
         "https://github.com/pdf/zfs_exporter/releases/download/v${ZFS_EXPORTER_VERSION}/${archive}"; \
     actual="$(sha256sum /tmp/zfs_exporter.tar.gz)"; \
     actual="${actual%% *}"; \
@@ -150,13 +151,13 @@ COPY --from=fetch /out/zfs_exporter /usr/local/bin/zfs_exporter
 
 # zfs_exporter calls exec.Command("zpool", ...) and exec.Command("zfs", ...),
 # so both names must resolve on PATH, and they must resolve to the shim.
-# /usr/local/bin is therefore first.
+# Thus /usr/local/bin is first.
 ENV PATH=/usr/local/bin:/usr/bin:/bin
 
-# The user is root, and it holds no capability above that. /dev/zfs is mode
-# 0600 root:root, so the ioctls need DAC ownership and no capability. The chart
-# drops the whole bounding set and mounts a read-only rootfs above this. DL3002
-# is the rule that a final USER should not be root. Here root is the
+# The user is root, and the user holds no capability above root. /dev/zfs is
+# mode 0600 root:root, so the ioctls need DAC ownership and no capability. The
+# chart drops the whole bounding set and mounts a read-only rootfs above this.
+# DL3002 is the rule that the final USER must not be root. Here root is the
 # intention.
 # hadolint ignore=DL3002
 USER 0:0
