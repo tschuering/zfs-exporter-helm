@@ -226,6 +226,10 @@ jobs:
           done
 
   image:
+    # The name carries the architecture and not the runner label. The ruleset
+    # on main requires the checks image-amd64 and image-arm64 by name, so a
+    # runner change must not change the check names.
+    name: image-${{ matrix.arch }}
     # Each architecture builds and tests on its own native runner. The old
     # arm64 build ran under QEMU user-mode emulation: it compiled both
     # OpenZFS userlands from scratch on every run, and the smoke test could
