@@ -6,3 +6,7 @@
 !cmd/
 !internal/
 !hack/collect-runtime-deps.sh
+# go build compiles no test file. Without this line, a test-only change
+# invalidates the COPY of cmd/ and every image layer after it.
+cmd/**/*_test.go
+internal/**/*_test.go
