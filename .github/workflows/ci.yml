@@ -167,9 +167,9 @@ jobs:
       - name: build
         run: CGO_ENABLED=0 go build ./...
 
-      # The image job builds both architectures, and it does so under
-      # emulation. A compile for arm64 here fails in seconds instead of
-      # minutes.
+      # The image job builds both architectures on their own runners. A
+      # compile error for the other architecture fails here in seconds,
+      # before any image build starts.
       - name: cross-compile
         env:
           CGO_ENABLED: "0"
@@ -226,7 +226,25 @@ jobs:
           done
 
   image:
-    runs-on: ubuntu-latest
+    # The name carries the architecture and not the runner label. The ruleset
+    # on main requires the checks image-amd64 and image-arm64 by name, so a
+    # runner change must not change the check names.
+    name: image-${{ matrix.arch }}
+    # Each architecture builds and tests on its own native runner. The old
+    # arm64 build ran under QEMU user-mode emulation: it compiled both
+    # OpenZFS userlands from scratch on every run, and the smoke test could
+    # not run there at all, because a fork under that emulation segfaults.
+    # Native runners remove the emulation, and they run the smoke test on
+    # both architectures.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       # Both permissions are for the SARIF upload below. actions:read lets the
@@ -240,23 +258,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      # This builds for the host architecture and loads the image locally, so
-      # that the smoke test runs natively. The exporter forks zpool(8), and a
-      # fork under QEMU user-mode emulation segfaults for reasons unrelated to
-      # this image.
-      - name: build (amd64, loaded)
+      # This builds for the runner's own architecture and loads the image
+      # locally, so that the smoke test below runs natively. The cache scope
+      # separates the architectures. Without it, the two legs share one
+      # cache entry and evict each other.
+      - name: build (loaded)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.arch }}
           load: true
           tags: zfs-exporter:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       # This proves what the Dockerfile is responsible for. The exporter runs.
       # The shim selects a bundled userland and starts it through that tree's
@@ -325,14 +341,6 @@ jobs:
           grep -q '^zfs_scrape_collector_success' /tmp/metrics
           echo "ok: /metrics served $(wc -l < /tmp/metrics) lines"
 
-      - name: build (arm64, no push)
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/arm64
-          push: false
-          cache-from: type=gha
-
       # The scan is split deliberately.
       #
       # The OS layer belongs to this repository. The base image digest and the
@@ -381,7 +389,9 @@ jobs:
         uses: github/codeql-action/upload-sarif@486fec2a3ea2626afcd8c7e9208b4f515078dd7e # codeql-bundle-v2.26.4
         with:
           sarif_file: trivy.sarif
-          category: trivy-image
+          # One category per architecture. With a shared category, the second
+          # leg's upload replaces the first leg's findings.
+          category: trivy-image-${{ matrix.arch }}
 
       - name: report findings in the log instead
         if: ${{ github.event.repository.private }}
