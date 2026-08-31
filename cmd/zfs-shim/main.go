@@ -28,7 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -50,65 +50,109 @@ var majorMinor = regexp.MustCompile(`^(\d+)\.(\d+)`)
 func main() {
 	slog.SetDefault(logging.New(os.Stderr))
 
-	name := filepath.Base(os.Args[0])
-	if name != "zpool" && name != "zfs" {
-		fatal(fmt.Errorf("invoked as %q; expected zpool or zfs", name))
-	}
-
-	version, err := detectVersion(versionSource)
+	loader, argv, err := execArgv(
+		treeRoot, versionSource, filepath.Base(os.Args[0]), os.Args[1:],
+	)
 	if err != nil {
 		fatal(err)
 	}
 
-	tree := filepath.Join(treeRoot, version)
+	// The exec of a computed path is the purpose of this program. The path
+	// points into a tree that the image carries under /opt/zfs, and not to
+	// user input.
+	//nolint:gosec // G204: the shim exists to exec the selected zpool or zfs
+	if err := syscall.Exec(loader, argv, os.Environ()); err != nil {
+		// argv[3] is the real command that the loader starts.
+		fatal(fmt.Errorf("exec %s: %w", argv[3], err))
+	}
+}
+
+// execArgv selects the tree under root that matches the host version from
+// source. It returns the tree's loader, and the argument vector that makes
+// the loader run the named command with the given args.
+func execArgv(root, source, name string, args []string) (string, []string, error) {
+	if name != "zpool" && name != "zfs" {
+		return "", nil, fmt.Errorf("invoked as %q; expected zpool or zfs", name)
+	}
+
+	version, err := detectVersion(source)
+	if err != nil {
+		return "", nil, err
+	}
+
+	tree := filepath.Join(root, version)
 	if _, err := os.Stat(tree); err != nil {
-		fatal(fmt.Errorf(
+		// A permission or I/O error is not a missing userland. The message
+		// that follows sends a reader after the wrong thing. Thus this branch
+		// reports what actually happened.
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", nil, fmt.Errorf("stat %s: %w", tree, err)
+		}
+
+		return "", nil, fmt.Errorf(
 			"no bundled OpenZFS userland for host version %s; this image carries %s",
-			version, strings.Join(available(treeRoot), ", ")))
+			version, strings.Join(available(root), ", "),
+		)
 	}
 
 	loader, err := findLoader(tree)
 	if err != nil {
-		fatal(err)
+		return "", nil, err
 	}
 
 	target := filepath.Join(tree, "sbin", name)
 	argv := append([]string{
 		loader, "--library-path", filepath.Join(tree, "lib"), target,
-	}, os.Args[1:]...)
+	}, args...)
 
-	if err := syscall.Exec(loader, argv, os.Environ()); err != nil {
-		fatal(fmt.Errorf("exec %s: %w", target, err))
-	}
+	return loader, argv, nil
 }
 
 // detectVersion returns the major.minor of the host's ZFS kernel module.
 func detectVersion(source string) (string, error) {
 	if v := os.Getenv(versionEnv); v != "" {
-		m := majorMinor.FindStringSubmatch(v)
-		if m == nil {
+		version, ok := parseVersion(v)
+		if !ok {
 			return "", fmt.Errorf("%s=%q is not a version", versionEnv, v)
 		}
-		return m[1] + "." + m[2], nil
+
+		return version, nil
 	}
 
+	//nolint:gosec // G304: source is the constant versionSource, or a path from a test
 	raw, err := os.ReadFile(source)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf(
 			"%s does not exist: the ZFS kernel module is not loaded on this "+
-				"node, so there is nothing to report on", source)
+				"node, so there is nothing to report on", source,
+		)
 	}
+
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", source, err)
 	}
 
 	v := strings.TrimSpace(string(raw))
-	m := majorMinor.FindStringSubmatch(v)
-	if m == nil {
+
+	version, ok := parseVersion(v)
+	if !ok {
 		return "", fmt.Errorf("%s contains %q, which is not a version",
 			source, v)
 	}
-	return m[1] + "." + m[2], nil
+
+	return version, nil
+}
+
+// parseVersion returns the leading major.minor of v, and reports whether v
+// carries one. The two callers of this function differ only in the message
+// that they give for a value with no version in it.
+func parseVersion(v string) (string, bool) {
+	m := majorMinor.FindStringSubmatch(v)
+	if m == nil {
+		return "", false
+	}
+
+	return m[1] + "." + m[2], true
 }
 
 // findLoader returns the tree's own dynamic loader. The name of that loader
@@ -119,10 +163,13 @@ func findLoader(tree string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if len(matches) == 0 {
 		return "", fmt.Errorf("no dynamic loader in %s/lib", tree)
 	}
-	sort.Strings(matches)
+
+	slices.Sort(matches)
+
 	return matches[0], nil
 }
 
@@ -132,16 +179,21 @@ func available(root string) []string {
 	if err != nil {
 		return []string{"none"}
 	}
+
 	var out []string
+
 	for _, e := range entries {
 		if e.IsDir() {
 			out = append(out, e.Name())
 		}
 	}
+
 	if len(out) == 0 {
 		return []string{"none"}
 	}
-	sort.Strings(out)
+
+	slices.Sort(out)
+
 	return out
 }
 

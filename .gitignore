@@ -1,5 +1,6 @@
-*.tgz
-# `go build ./...` drops the shim binary in the repo root
-/zfs-shim
+/cover.out
 /sbom.spdx.json
 .DS_Store
+.agents/
+.claude/
+CLAUDE.MD
