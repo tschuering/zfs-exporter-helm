@@ -414,13 +414,13 @@ $ make build     # build for the host architecture
 $ make smoke     # run it and scrape /metrics
 $ make lint      # hadolint, shellcheck, yamllint
 $ make chart     # helm lint, render, kubeconform
-$ make scan      # trivy, failing on HIGH and CRITICAL
+$ make scan      # trivy, failing on the OS layer
 ```
 
-`make scan` blocks on HIGH and CRITICAL across the whole image, so the upstream
-binary's advisories make it red on a clean tree. CI splits the scan instead: it
-blocks only on the OS layer, and it reports the findings in the binary to the
-Security tab. See [Scanner findings](#scanner-findings).
+`make scan` runs the same split as CI. A finding in the OS layer fails it,
+because the base image and the packages above it are this repository's
+decision. The upstream binary is reported and does not fail the target, because
+no change here can correct it. See [Scanner findings](#scanner-findings).
 
 To move to a new upstream release:
 

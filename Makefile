@@ -57,11 +57,13 @@ chart: ## helm lint, then render and schema-check each ci/ values file
 				-schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'; \
 	done
 
-# This scans the whole image, so it is red on a clean tree: the upstream
-# exporter binary carries Go advisories that no change here can correct. CI
-# splits the scan and blocks only on the OS layer. See SECURITY.md.
-scan: build ## Trivy scan. Fails on HIGH and CRITICAL
-	trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 $(IMAGE):$(TAG)
+# The same split that CI runs. The OS layer belongs to this repository, so a
+# finding there fails the target. The upstream exporter binary does not, and it
+# carries Go advisories that no change here can correct, so the second scan
+# reports and does not fail. See SECURITY.md.
+scan: build ## Trivy scan. Fails on the OS layer, reports the binary
+	trivy image --ignore-unfixed --severity HIGH,CRITICAL --pkg-types os --exit-code 1 $(IMAGE):$(TAG)
+	trivy image --ignore-unfixed --severity MEDIUM,HIGH,CRITICAL --exit-code 0 $(IMAGE):$(TAG)
 
 clean:
 	docker rmi -f $(IMAGE):$(TAG) 2>/dev/null || true
