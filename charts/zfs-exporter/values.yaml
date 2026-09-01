@@ -113,6 +113,22 @@ devicePlugin:
   # advertises devices on the same node.
   resourceName: tschuering.github.io/dev-zfs
 
+  # Empty by default, which puts the plugin in the release namespace.
+  #
+  # The plugin mounts the kubelet plugin directory, and the baseline Pod
+  # Security Standard forbids a hostPath volume. Its namespace can therefore
+  # only enforce the privileged level. The exporter satisfies the restricted
+  # level, so a shared namespace holds the exporter at the weaker level for no
+  # reason. Name a namespace here to separate them.
+  #
+  # The extended resource is a node property and not a namespace property, so
+  # the exporter still finds the device from another namespace.
+  #
+  # This chart renders no Namespace object, and Helm creates none. Create the
+  # namespace before the install, and label it
+  # pod-security.kubernetes.io/enforce=privileged.
+  namespace: ""
+
   # The directory where the kubelet expects plugin sockets. The kubelet
   # hardcodes this path, but the root moves on some distributions.
   kubeletPluginDir: /var/lib/kubelet/device-plugins

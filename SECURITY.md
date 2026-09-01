@@ -87,14 +87,36 @@ it. The exporter then stops at `open()` with `permission denied`. Run
 `runAsGroup` values to 0. `runAsNonRoot` follows them, and every other setting
 stays as it is.
 
-### One namespace consequence
+### Pod Security Admission
 
-The plugin mounts the kubelet plugin directory as a hostPath, and the
-**baseline** Pod Security Standard forbids hostPath volumes. The release
-namespace therefore needs
-`pod-security.kubernetes.io/enforce: privileged`. That level applies to the
-exporter as well, although the exporter satisfies **restricted**. Install the
-plugin in its own namespace if the exporter's namespace must enforce a level.
+The two pods do not belong at the same level. The exporter satisfies
+**restricted**. The plugin mounts the kubelet plugin directory, and
+**baseline** forbids a hostPath volume, so the plugin can only sit in a
+namespace that enforces **privileged**.
+
+In one namespace, the weaker level applies to both. Set
+`devicePlugin.namespace` to separate them:
+
+```yaml
+devicePlugin:
+  namespace: zfs-system
+```
+
+The exporter's namespace can then enforce `restricted`, and only
+`zfs-system` enforces `privileged`. The extended resource is a node property
+and not a namespace property, so the exporter still receives the device.
+
+The chart renders no Namespace object, and Helm creates none. Create that
+namespace first, and label it:
+
+```console
+$ kubectl create namespace zfs-system
+$ kubectl label namespace zfs-system \
+    pod-security.kubernetes.io/enforce=privileged
+```
+
+Without the split, label the release namespace `privileged`. The install fails
+under `baseline` or `restricted`, because the plugin is refused.
 
 ## Known findings in the exporter binary
 

@@ -53,6 +53,21 @@ It goes on the pod template instead, which keeps the selector a subset.
 app.kubernetes.io/component: exporter
 {{- end -}}
 
+{{/*
+The namespace of the device plugin. It defaults to the release namespace.
+
+A separate namespace exists for one reason. The plugin mounts the kubelet
+plugin directory, and the baseline Pod Security Standard forbids a hostPath
+volume, so the plugin's namespace can only enforce the privileged level. The
+exporter satisfies the restricted level, and it should not inherit that.
+
+The chart renders no Namespace object. Helm does not create one either, so the
+namespace must exist before the install.
+*/}}
+{{- define "zfs-exporter.devicePluginNamespace" -}}
+{{- default .Release.Namespace .Values.devicePlugin.namespace -}}
+{{- end -}}
+
 {{/* A setting that would otherwise fail silently. */}}
 {{- define "zfs-exporter.validateValues" -}}
 {{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}

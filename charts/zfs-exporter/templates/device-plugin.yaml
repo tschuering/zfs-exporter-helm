@@ -20,7 +20,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: {{ include "zfs-exporter.fullname" . }}-device-plugin
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "zfs-exporter.devicePluginNamespace" . }}
   labels:
     {{- include "zfs-exporter.labels" . | nindent 4 }}
     app.kubernetes.io/component: device-plugin

@@ -235,6 +235,26 @@ separate mechanisms. OpenZFS checks `CAP_SYS_ADMIN` inside each mutating ioctl,
 and this container holds no capability, so the kernel refuses `zfs destroy`
 with `EPERM`. See `Permissions` in `cmd/zfs-device-plugin/main.go`.
 
+### The plugin decides the namespace's security level
+
+The plugin mounts the kubelet plugin directory, and the **baseline** Pod
+Security Standard forbids a hostPath volume. Its namespace can therefore only
+enforce **privileged**, while the exporter satisfies **restricted**. In one
+namespace the weaker level covers both.
+
+`devicePlugin.namespace` separates them. The chart renders no Namespace object
+and Helm creates none, so create it first:
+
+```console
+$ kubectl create namespace zfs-system
+$ kubectl label namespace zfs-system pod-security.kubernetes.io/enforce=privileged
+$ helm install zfs-exporter oci://ghcr.io/tschuering/charts/zfs-exporter \
+    --namespace monitoring --set devicePlugin.namespace=zfs-system
+```
+
+The extended resource is a node property and not a namespace property, so the
+exporter still receives the device from another namespace.
+
 ### A second thing the plugin buys you
 
 The plugin advertises the resource only on nodes that have `/dev/zfs`. The
@@ -388,6 +408,7 @@ key has a comment. These are the keys that change most often:
 | `serviceMonitor.enabled` | `false` | needs the Prometheus Operator CRD |
 | `networkPolicy.enabled` | `false` | see [Restricting who may scrape](#restricting-who-may-scrape) |
 | `devicePlugin.resourceName` | `tschuering.github.io/dev-zfs` | change only on a collision |
+| `devicePlugin.namespace` | `""` | put the plugin elsewhere, so this namespace can enforce a stricter PSA level |
 | `devicePlugin.kubeletPluginDir` | `/var/lib/kubelet/device-plugins` | if your kubelet root differs |
 | `zfsUserlandVersion` | `""` | override branch detection, e.g. `"2.4"` |
 | `runAsUser` | `65532` | set to `0` where `/dev/zfs` is `0600`, see [Security posture](#security-posture) |
