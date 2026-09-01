@@ -96,7 +96,8 @@ manager and no apt state.
 | `/opt/zfs/2.3/` | Debian trixie `zfsutils-linux`, with its libraries and loader |
 | `/opt/zfs/2.4/` | Debian forky `zfsutils-linux`, likewise |
 
-The image is about 84 MB. It is built for `linux/amd64` and `linux/arm64`.
+The image is about 84 MB unpacked, and about 35 MB to pull. It is built for
+`linux/amd64` and `linux/arm64`.
 
 The build verifies the exporter binary against digests held in this repository.
 It does not use the `sha256sums.txt` that upstream serves next to the release.
