@@ -57,6 +57,9 @@ chart: ## helm lint, then render and schema-check each ci/ values file
 				-schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'; \
 	done
 
+# This scans the whole image, so it is red on a clean tree: the upstream
+# exporter binary carries Go advisories that no change here can correct. CI
+# splits the scan and blocks only on the OS layer. See SECURITY.md.
 scan: build ## Trivy scan. Fails on HIGH and CRITICAL
 	trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 $(IMAGE):$(TAG)
 

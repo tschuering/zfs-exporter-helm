@@ -1,6 +1,6 @@
 {{ include "zfs-exporter.fullname" . }} is rolling out as a DaemonSet in namespace {{ .Release.Namespace }}.
 
-Metrics:  http://{{ include "zfs-exporter.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/metrics
+Metrics:  http://{{ include "zfs-exporter.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.listenPort }}/metrics
 
 On a first install, the exporter pods stay Pending for a few seconds with
 "Insufficient {{ .Values.devicePlugin.resourceName }}". That is expected,
@@ -16,7 +16,7 @@ it runs:
 Check that the nodes can reach their pools. A pod on a node with no ZFS kernel
 module stays Running and reports every collector as failed. It does not crash:
 
-  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/name={{ include "zfs-exporter.name" . }} --tail=20
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=exporter --tail=20
 
   kubectl -n {{ .Release.Namespace }} exec ds/{{ include "zfs-exporter.fullname" . }} -- \
     /usr/local/bin/zfs_exporter --version

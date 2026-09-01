@@ -16,11 +16,16 @@
 // the kernel refuses every operation that would change that state. A
 // privileged exporter has no such protection.
 //
-// This plugin is privileged, because the kubelet's plugin directory requires
-// it. Kubernetes documents that requirement, so it is not a choice made here.
+// This plugin is not privileged. It runs as uid 0 and holds no capability,
+// because the kubelet plugin directory is mode 0755 root:root and only uid 0
+// can create the socket there. Measured on a node: CapEff 0000000000000000,
+// seccomp active, and the registration succeeds. A privileged container would
+// also switch seccomp off, and nothing here needs that.
+//
 // The plugin is not reachable. It serves one gRPC service on a Unix socket in
 // that directory, it has no network listener, and it never opens the device
-// that it supplies.
+// that it supplies. Allocate returns a description, and the kubelet is what
+// inserts the node and writes the cgroup rule.
 package main
 
 import (
@@ -53,7 +58,12 @@ const (
 	defaultResourceName = "tschuering.github.io/dev-zfs"
 	defaultDevicePath   = "/dev/zfs"
 	defaultPluginDir    = pluginapi.DevicePluginPath
-	socketName          = "zfs-exporter.sock"
+
+	// Every plugin on a node shares one directory, so this name must be
+	// unique per release. Two releases that use the same name fight: the
+	// second one removes the socket of the first (see serve) and registers
+	// itself in its place. The chart therefore passes the release name.
+	defaultSocketName = "zfs-exporter.sock"
 
 	// This is deliberately not pluginapi.KubeletSocket. That constant holds
 	// the full path. A join of that constant onto the plugin directory gives
@@ -81,6 +91,7 @@ type config struct {
 	resourceName  string
 	devicePath    string
 	pluginDir     string
+	socketName    string
 	count         int
 	watchInterval time.Duration
 }
@@ -95,6 +106,7 @@ func main() {
 		resourceName:  env("RESOURCE_NAME", defaultResourceName),
 		devicePath:    env("DEVICE_PATH", defaultDevicePath),
 		pluginDir:     env("PLUGIN_DIR", defaultPluginDir),
+		socketName:    envName("SOCKET_NAME", defaultSocketName),
 		count:         envInt("DEVICE_COUNT", 1),
 		watchInterval: defaultWatchInterval,
 	}
@@ -129,7 +141,7 @@ func serve(ctx context.Context, cfg config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	socket := pluginSocketPath(cfg.pluginDir)
+	socket := pluginSocketPath(cfg.pluginDir, cfg.socketName)
 	if err := os.Remove(socket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("clearing stale socket: %w", err)
 	}
@@ -207,7 +219,7 @@ func register(ctx context.Context, cfg config) error {
 
 	_, err = pluginapi.NewRegistrationClient(conn).Register(call, &pluginapi.RegisterRequest{
 		Version:      pluginapi.Version,
-		Endpoint:     socketName,
+		Endpoint:     cfg.socketName,
 		ResourceName: cfg.resourceName,
 	})
 
@@ -319,7 +331,7 @@ func kubeletSocketPath(pluginDir string) string {
 	return filepath.Join(pluginDir, kubeletSocketName)
 }
 
-func pluginSocketPath(pluginDir string) string {
+func pluginSocketPath(pluginDir, socketName string) string {
 	return filepath.Join(pluginDir, socketName)
 }
 
@@ -354,6 +366,26 @@ func env(key, fallback string) string {
 	}
 
 	return fallback
+}
+
+// envName reads a file name. filepath.Join would resolve a value that holds a
+// separator or "..", and the socket would then land outside the plugin
+// directory, where the kubelet cannot dial it. Thus a value that is not a
+// plain file name gets the fallback and a warning.
+func envName(key, fallback string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+
+	if v != filepath.Base(v) || v == "." || v == ".." {
+		slog.Warn("The value is not a plain file name, the fallback applies",
+			"variable", key, "value", v)
+
+		return fallback
+	}
+
+	return v
 }
 
 func envInt(key string, fallback int) int {

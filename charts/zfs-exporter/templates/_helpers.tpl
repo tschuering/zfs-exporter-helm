@@ -42,11 +42,21 @@ app.kubernetes.io/name: {{ include "zfs-exporter.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{- define "zfs-exporter.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
-{{- default (include "zfs-exporter.fullname" .) .Values.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
+{{/*
+Selector labels for the exporter pods alone. The device-plugin pods carry the
+two labels above as well, so those two match both workloads. The DaemonSet
+selector cannot carry the component label, because spec.selector is immutable.
+It goes on the pod template instead, which keeps the selector a subset.
+*/}}
+{{- define "zfs-exporter.exporterSelectorLabels" -}}
+{{ include "zfs-exporter.selectorLabels" . }}
+app.kubernetes.io/component: exporter
+{{- end -}}
+
+{{/* A setting that would otherwise fail silently. */}}
+{{- define "zfs-exporter.validateValues" -}}
+{{- if and .Values.serviceMonitor.enabled (not .Values.service.enabled) -}}
+{{- fail "zfs-exporter: serviceMonitor.enabled needs service.enabled. A ServiceMonitor selects a Service, so without one it finds no target and reports no error." -}}
 {{- end -}}
 {{- end -}}
 

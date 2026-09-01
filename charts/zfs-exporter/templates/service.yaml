@@ -15,18 +15,21 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ .Values.service.type }}
-  # A DaemonSet reports different metrics on each node, so a client must
-  # address each pod separately and not through a load balancer. A ClusterIP
-  # that selected one pod per scrape would report a different node's pools each
-  # time. Endpoint discovery (ServiceMonitor, or Alloy role=endpoints) reads
-  # every address.
-  clusterIP: {{ if eq .Values.service.type "ClusterIP" }}None{{ else }}""{{ end }}
+  # Headless, and not a value. A DaemonSet reports different metrics on each
+  # node, so a client must address each pod separately. A load-balanced address
+  # would report a different node's pools on each scrape. Endpoint discovery
+  # (ServiceMonitor, or Alloy role=endpoints) reads every address.
+  type: ClusterIP
+  clusterIP: None
+  # The component label is required here. Without it this selector also matches
+  # the device-plugin pods.
   selector:
-    {{- include "zfs-exporter.selectorLabels" . | nindent 4 }}
+    {{- include "zfs-exporter.exporterSelectorLabels" . | nindent 4 }}
   ports:
     - name: metrics
-      port: {{ .Values.service.port }}
+      # A headless Service translates no port, so this is listenPort and it
+      # cannot be an independent value.
+      port: {{ .Values.listenPort }}
       targetPort: metrics
       protocol: TCP
 {{- end }}

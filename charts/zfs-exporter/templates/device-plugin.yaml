@@ -8,10 +8,14 @@
 # requests is registered, so a plugin in that same pod could never start. The
 # pod would wait for itself.
 #
-# The plugin is privileged, because the kubelet's plugin directory requires it.
-# Kubernetes documents that requirement, so it is not a choice made here. The
-# plugin has no network listener. It communicates only with the kubelet over a
-# Unix socket, and it never opens the device that it supplies.
+# The plugin is not privileged. It runs as uid 0, because the kubelet plugin
+# directory is mode 0755 root:root and only uid 0 can create the socket there.
+# It holds no capability: measured on a node, it registers and serves with
+# CapEff 0000000000000000 and seccomp active.
+#
+# The plugin has no network listener. It communicates only with the kubelet
+# over a Unix socket, and it never opens the device that it supplies. Allocate
+# returns a description of the node, and the kubelet performs the insertion.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -26,13 +30,13 @@ spec:
       {{- include "zfs-exporter.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: device-plugin
   updateStrategy:
-    {{- toYaml .Values.updateStrategy | nindent 4 }}
+    {{- toYaml .Values.devicePlugin.updateStrategy | nindent 4 }}
   template:
     metadata:
       labels:
         {{- include "zfs-exporter.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: device-plugin
-        {{- with .Values.podLabels }}
+        {{- with .Values.devicePlugin.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- with .Values.devicePlugin.podAnnotations }}
@@ -53,8 +57,24 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # No serviceAccountName, so this pod runs as the namespace's default
+      # account with no token. The plugin speaks only to the kubelet over a
+      # Unix socket and never calls the API server.
       automountServiceAccountToken: false
+      # Root, because the kubelet plugin directory is root-owned and the
+      # plugin writes its socket there. Root is the whole requirement: the
+      # container passes the permission check on ownership, and it holds no
+      # capability at all.
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      # The plugin shares no host namespace. It reaches the kubelet through a
+      # Unix socket in a mounted directory, and not through the network.
       hostNetwork: false
+      hostPID: false
+      hostIPC: false
       containers:
         - name: device-plugin
           image: {{ include "zfs-exporter.image" . }}
@@ -64,30 +84,43 @@ spec:
           env:
             - name: RESOURCE_NAME
               value: {{ .Values.devicePlugin.resourceName | quote }}
+            # OpenZFS creates the device at this path, and the module does not
+            # make the path configurable.
             - name: DEVICE_PATH
-              value: {{ .Values.devicePlugin.devicePath | quote }}
+              value: "/dev/zfs"
             - name: PLUGIN_DIR
               value: {{ .Values.devicePlugin.kubeletPluginDir | quote }}
+            # Every device plugin on a node shares the directory above, so
+            # this name carries the release name. Two releases of this chart
+            # would otherwise publish the same socket, and the second one
+            # would remove the socket of the first. It is not a value: a
+            # release name is already unique in a namespace.
+            - name: SOCKET_NAME
+              value: {{ printf "%s.sock" (include "zfs-exporter.fullname" .) | quote }}
+            # One exporter pod per node holds the device, so one is the count.
             - name: DEVICE_COUNT
-              value: {{ .Values.devicePlugin.count | quote }}
+              value: "1"
           resources:
             {{- toYaml .Values.devicePlugin.resources | nindent 12 }}
           securityContext:
-            # This is not a preference. Kubernetes documents that the
-            # kubelet's plugin directory requires a privileged security
-            # context. privileged is all or nothing: it grants every capability
-            # and disables seccomp, whatever else this block sets. A capability
-            # list or a seccomp profile here would read as a restriction and do
-            # nothing, so this block sets neither.
-            privileged: true
+            # Not privileged. The plugin creates a socket in a root-owned
+            # directory and calls stat() on a device node. Both are ordinary
+            # file operations for uid 0, and neither needs a capability. The
+            # measured result on a node is CapEff 0000000000000000 with the
+            # socket created, so the whole bounding set goes.
+            privileged: false
+            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: kubelet-plugins
               mountPath: {{ .Values.devicePlugin.kubeletPluginDir }}
             # The plugin only calls stat() on this path, to decide whether to
             # advertise a device.
             - name: dev-zfs
-              mountPath: {{ .Values.devicePlugin.devicePath }}
+              mountPath: /dev/zfs
               readOnly: true
       volumes:
         - name: kubelet-plugins
@@ -96,5 +129,5 @@ spec:
             type: Directory
         - name: dev-zfs
           hostPath:
-            path: {{ .Values.devicePlugin.devicePath }}
+            path: /dev/zfs
             type: CharDevice

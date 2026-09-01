@@ -1,3 +1,4 @@
+{{- include "zfs-exporter.validateValues" . }}
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -6,7 +7,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "zfs-exporter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: exporter
 spec:
+  # These two labels match the device-plugin pods as well. spec.selector is
+  # immutable, so it cannot gain the component label that separates them. The
+  # pod template below carries that label, and the Service and the
+  # NetworkPolicy select on it.
   selector:
     matchLabels:
       {{- include "zfs-exporter.selectorLabels" . | nindent 6 }}
@@ -15,7 +21,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "zfs-exporter.selectorLabels" . | nindent 8 }}
+        {{- include "zfs-exporter.exporterSelectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -29,8 +35,11 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "zfs-exporter.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      # No serviceAccountName. Every pod gets a service account, and with this
+      # field unset the admission controller writes "default". The token is
+      # what grants API access, and this pod projects none. An exporter that
+      # reads the node's ZFS state needs no Kubernetes credential.
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -38,12 +47,25 @@ spec:
       {{- with .Values.priorityClassName }}
       priorityClassName: {{ . }}
       {{- end }}
-      hostNetwork: {{ .Values.hostNetwork }}
-      hostPID: {{ .Values.hostPID }}
-      dnsPolicy: {{ .Values.dnsPolicy }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      # Not values. The exporter reads the node's ZFS state through /dev/zfs,
+      # and it opens no outbound connection. It needs no host namespace, and
+      # hostNetwork: true would also put the metrics port on the node address,
+      # where most CNIs stop applying the NetworkPolicy.
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      # runAsNonRoot follows runAsUser, so the two can never contradict each
+      # other. A values file merges into the defaults rather than replacing
+      # them, so a free-form block here would leave runAsNonRoot: true beside
+      # runAsUser: 0, and the kubelet would refuse the pod.
+      #
+      # The seccomp profile is not a value. Nothing here needs it removed.
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        runAsUser: {{ .Values.runAsUser }}
+        runAsGroup: {{ .Values.runAsGroup }}
+        runAsNonRoot: {{ ne (int .Values.runAsUser) 0 }}
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -79,6 +101,11 @@ spec:
             - name: metrics
               containerPort: {{ .Values.listenPort }}
               protocol: TCP
+          # The two probes have the same parameters, and each one does a
+          # different job. The liveness probe restarts a listener that stopped
+          # answering. The readiness probe gates the rollout: the DaemonSet
+          # controller counts a pod that is not ready against maxUnavailable,
+          # so a broken image stops after one node.
           {{- with .Values.livenessProbe }}
           livenessProbe:
             {{- toYaml . | nindent 12 }}
@@ -104,8 +131,17 @@ spec:
               {{- toYaml . | nindent 14 }}
               {{- end }}
               {{ .Values.devicePlugin.resourceName }}: 1
+          # Not values. Every other setting of these four fields weakens the
+          # pod, and none of them has a use: the exporter reads pool and
+          # dataset properties and writes nothing. privileged: true would also
+          # discard the seccomp profile above.
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           {{- with .Values.extraVolumeMounts }}
           volumeMounts:
             {{- toYaml . | nindent 12 }}
