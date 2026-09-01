@@ -350,11 +350,12 @@ jobs:
       # The exporter binary does not belong to this repository. Upstream
       # publishes prebuilt release binaries, and this image packages exactly
       # those bytes. That provenance is the point, and a rebuild from source to
-      # clear findings discards it. Upstream currently builds with an
-      # older Go toolchain, so the binary carries stdlib and x/* advisories
-      # that no change here can correct. This workflow reports those findings
-      # to the Security tab and records them as accepted risk (see
-      # SECURITY.md). It does not keep the pipeline permanently red.
+      # clear findings discards it. Upstream builds with Go 1.24.2, so the
+      # binary carries stdlib and x/* advisories that no change here can
+      # correct. pdf/zfs_exporter#71 asks upstream for the toolchain bump that
+      # does correct them. Until a release carries it, this workflow reports
+      # those findings to the Security tab and records them as accepted risk
+      # (see SECURITY.md). It does not keep the pipeline permanently red.
       - name: trivy (os packages, blocking)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

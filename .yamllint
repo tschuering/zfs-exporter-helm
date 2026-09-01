@@ -8,6 +8,10 @@ extends: default
 
 ignore: |
   charts/*/templates/
+  # Vendored skill definitions. Both directories are in .gitignore, so CI
+  # never sees them, and their YAML is not this repository's to correct.
+  .agents/
+  .claude/
 
 rules:
   line-length:

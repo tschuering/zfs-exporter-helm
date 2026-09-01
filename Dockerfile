@@ -154,9 +154,14 @@ COPY --from=fetch /out/zfs_exporter /usr/local/bin/zfs_exporter
 # Thus /usr/local/bin is first.
 ENV PATH=/usr/local/bin:/usr/bin:/bin
 
-# The user is root, and the user holds no capability above root. /dev/zfs is
-# mode 0600 root:root, so the ioctls need DAC ownership and no capability. The
-# chart drops the whole bounding set and mounts a read-only rootfs above this.
+# The image starts as root because of the device plugin, and not because of the
+# exporter. The plugin writes its socket into the kubelet plugin directory,
+# which is mode 0755 root:root, so only uid 0 can create a file there.
+#
+# The chart overrides this for the exporter, which runs as uid 65532. The
+# exporter needs no root: OpenZFS ships a udev rule that sets /dev/zfs to mode
+# 0666, and its read ioctls require no privilege. The chart also drops the
+# whole capability bounding set and mounts a read-only rootfs above this line.
 # DL3002 is the rule that the final USER must not be root. Here root is the
 # intention.
 # hadolint ignore=DL3002

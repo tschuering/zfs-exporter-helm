@@ -21,24 +21,15 @@ nameOverride: ""
 fullnameOverride: ""
 commonLabels: {}
 
-# The exporter has its own service account, although it never calls the API.
-# Every pod runs as some service account. An empty setting selects "default",
-# not "none". CIS Kubernetes 5.1.5 states that default service accounts should
-# not be actively used. This account exists to satisfy that check, and it holds
-# no permission. The chart grants no RBAC at all.
+# There is no serviceAccount block, and no automountServiceAccountToken key.
+# Neither pod calls the Kubernetes API, so neither needs an identity. Both pods
+# pin automountServiceAccountToken: false, and that setting is what removes the
+# projected token. Without a token a pod cannot authenticate at all.
 #
-# Set create: false to run under the namespace's default account instead. The
-# token stays disabled in both cases.
-serviceAccount:
-  create: true
-  name: ""
-  annotations: {}
-
-# This is set on the pod, and the pod setting decides whether Kubernetes
-# projects a token. The same field on a ServiceAccount is only a default, and
-# the pod setting overrides it. There is deliberately one setting and not two:
-# an exporter that reads the node's ZFS state needs no Kubernetes credential.
-automountServiceAccountToken: false
+# A chart cannot give a pod no service account. With the field unset, the
+# admission controller writes "default", so both pods run as that account with
+# no token. A dedicated account would add a name and nothing else, because the
+# chart grants no RBAC.
 
 # ---------------------------------------------------------------------------
 # Scheduling
@@ -69,39 +60,36 @@ updateStrategy:
 # ---------------------------------------------------------------------------
 # Security
 #
-# Root is required, not incidental. /dev/zfs is mode 0600 root:root, so the
-# ioctls behind `zpool list` need DAC ownership. That is the only privilege the
-# pod holds. The chart drops every capability, mounts a read-only rootfs,
-# disables privilege escalation, and shares no host namespace. The exporter
-# reads pool and dataset properties. It never mounts, creates or destroys
-# anything.
-# ---------------------------------------------------------------------------
-podSecurityContext:
-  runAsUser: 0
-  runAsGroup: 0
-  seccompProfile:
-    type: RuntimeDefault
-
-# These settings have an effect because the exporter is not privileged. The
-# device comes from the device plugin instead, which is the reason this chart
-# carries one. `privileged: true` would silently discard the capability drop
-# and the seccomp profile above. Both effects are measured, not assumed.
+# The exporter runs as a non-root uid with no capability at all. Two separate
+# rules control a device node, and neither one needs root:
 #
-# With no capabilities, OpenZFS permits the exporter's reads and the kernel
-# refuses every other operation. zfs_secpolicy_read requires no privilege.
-# Every mutating ioctl goes through secpolicy_sys_config or secpolicy_zfs,
-# which are CAP_SYS_ADMIN or EPERM.
-securityContext:
-  privileged: false
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop:
-      - ALL
-
-hostNetwork: false
-hostPID: false
-dnsPolicy: ClusterFirst
+#   1. The device cgroup decides whether the container can open the node. The
+#      device plugin is what puts /dev/zfs on that list. This rule ignores the
+#      uid.
+#   2. The file permissions decide which uid can open it. OpenZFS ships
+#      90-zfs.rules, which sets /dev/zfs to mode 0666, so every uid passes.
+#
+# OpenZFS then checks each ioctl itself. zfs_secpolicy_read requires no
+# privilege, and every mutating ioctl requires CAP_SYS_ADMIN, which this pod
+# does not hold. Measured on a node: uid 65532, CapEff 0000000000000000, all
+# three collectors report success.
+#
+# These two keys are the whole security surface of this chart. The rest is not
+# configurable, because no other value has a use: runAsNonRoot follows the uid
+# below, the seccomp profile stays RuntimeDefault, and the container drops
+# every capability with a read-only root filesystem.
+#
+# 65532 is the uid that distroless calls "nonroot". With it, this pod meets the
+# restricted Pod Security Standard.
+#
+# ONE HOST NEEDS A CHANGE HERE. The udev rule above carries
+# OPTIONS+="static_node=zfs". On a host where udev never ran, the kernel
+# creates /dev/zfs at mode 0600 root:root and nothing relaxes it. The exporter
+# then stops at open() with "permission denied". Set both keys to 0 on such a
+# host, and runAsNonRoot follows. Run `ls -l /dev/zfs` on the node to see which
+# case applies.
+runAsUser: 65532
+runAsGroup: 65532
 
 # ---------------------------------------------------------------------------
 # Device plugin
@@ -125,21 +113,39 @@ devicePlugin:
   # advertises devices on the same node.
   resourceName: tschuering.github.io/dev-zfs
 
-  devicePath: /dev/zfs
+  # Empty by default, which puts the plugin in the release namespace.
+  #
+  # The plugin mounts the kubelet plugin directory, and the baseline Pod
+  # Security Standard forbids a hostPath volume. Its namespace can therefore
+  # only enforce the privileged level. The exporter satisfies the restricted
+  # level, so a shared namespace holds the exporter at the weaker level for no
+  # reason. Name a namespace here to separate them.
+  #
+  # The extended resource is a node property and not a namespace property, so
+  # the exporter still finds the device from another namespace.
+  #
+  # This chart renders no Namespace object, and Helm creates none. Create the
+  # namespace before the install, and label it
+  # pod-security.kubernetes.io/enforce=privileged.
+  namespace: ""
 
   # The directory where the kubelet expects plugin sockets. The kubelet
   # hardcodes this path, but the root moves on some distributions.
   kubeletPluginDir: /var/lib/kubelet/device-plugins
 
-  # The number of pods that can hold the device at the same time. One
-  # DaemonSet pod per node needs exactly one. Raise the value if something else
-  # requests the resource.
-  count: 1
-
   # Empty by default. system-node-critical is the usual choice for a node
   # component, but some clusters restrict those classes to kube-system.
   priorityClassName: ""
 
+  # The plugin has its own strategy, its own labels and its own annotations.
+  # The exporter and the plugin are separate workloads, and a rollout of one
+  # is not a rollout of the other.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+
+  podLabels: {}
   podAnnotations: {}
 
   resources:
@@ -205,18 +211,21 @@ readinessProbe:
   periodSeconds: 30
   timeoutSeconds: 5
 
-terminationGracePeriodSeconds: 30
-
 podAnnotations: {}
 podLabels: {}
 
 # ---------------------------------------------------------------------------
 # Service and scraping
 # ---------------------------------------------------------------------------
+# The Service is headless, and its port is listenPort. Neither is a value. A
+# DaemonSet reports different metrics on each node, so a load-balanced address
+# would report a different node's pools on each scrape. A headless Service
+# translates no port, so a separate Service port could only be wrong.
+#
+# Set enabled: false if nothing discovers by endpoint, for example with
+# prometheusAnnotations and an agent that reads pod annotations.
 service:
   enabled: true
-  type: ClusterIP
-  port: 9134
   annotations: {}
   labels: {}
 
@@ -230,9 +239,13 @@ serviceMonitor:
   scrapeTimeout: 30s
   labels: {}
   annotations: {}
+  # These are added to the relabeling that the template always applies, which
+  # copies the pod's node name onto the metrics. A DaemonSet reports per-node
+  # metrics, and they are useful only if a reader can separate the nodes.
   relabelings: []
   metricRelabelings: []
-  # A DaemonSet reports metrics per node, so copy the node name onto them.
+  # Keep the server's labels when a scraped label has the same name. The
+  # exporter sets no label that collides, so this stays false.
   honorLabels: false
 
 # An alternative to a ServiceMonitor, for agents that discover by annotation
@@ -245,6 +258,10 @@ prometheusAnnotations:
 # reader sees it as protection. On a cluster that does enforce policies, a
 # policy that names the wrong source stops your scraper from reaching this
 # exporter.
+#
+# The policy also denies every outbound connection, and that part has no
+# value. The exporter opens no connection of its own, so an egress rule could
+# only permit something that it never does.
 networkPolicy:
   enabled: false
   # Selectors for whatever scrapes this exporter, for example the Prometheus

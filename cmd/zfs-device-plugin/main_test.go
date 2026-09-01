@@ -63,7 +63,7 @@ func TestSocketPaths(t *testing.T) {
 				t.Errorf("kubeletSocketPath(%q) = %q, want %q", tc.dir, got, tc.wantKubelet)
 			}
 
-			if got := pluginSocketPath(tc.dir); got != tc.wantPlugin {
+			if got := pluginSocketPath(tc.dir, defaultSocketName); got != tc.wantPlugin {
 				t.Errorf("pluginSocketPath(%q) = %q, want %q", tc.dir, got, tc.wantPlugin)
 			}
 		})
@@ -131,7 +131,10 @@ func TestRegisterReachesTheKubelet(t *testing.T) {
 		resourceName: "example.test/dev-zfs",
 		devicePath:   devNull,
 		pluginDir:    dir,
-		count:        1,
+		// Deliberately not defaultSocketName. The kubelet dials the endpoint
+		// that the plugin names, so a hardcoded name must fail this test.
+		socketName: "release-two.sock",
+		count:      1,
 	}
 	if err := register(t.Context(), cfg); err != nil {
 		t.Fatalf("register: %v", err)
@@ -143,8 +146,8 @@ func TestRegisterReachesTheKubelet(t *testing.T) {
 			t.Errorf("ResourceName = %q, want %q", req.ResourceName, cfg.resourceName)
 		}
 
-		if req.Endpoint != socketName {
-			t.Errorf("Endpoint = %q, want %q -- the kubelet dials this relative to its own directory", req.Endpoint, socketName)
+		if req.Endpoint != cfg.socketName {
+			t.Errorf("Endpoint = %q, want %q -- the kubelet dials this relative to its own directory", req.Endpoint, cfg.socketName)
 		}
 
 		if req.Version != pluginapi.Version {
@@ -160,7 +163,7 @@ func TestRegisterReachesTheKubelet(t *testing.T) {
 func TestRegisterFailsWithoutKubelet(t *testing.T) {
 	t.Parallel()
 
-	cfg := config{resourceName: "example.test/dev-zfs", pluginDir: socketDir(t), count: 1}
+	cfg := config{resourceName: "example.test/dev-zfs", pluginDir: socketDir(t), socketName: defaultSocketName, count: 1}
 	if err := register(t.Context(), cfg); err == nil {
 		t.Fatal("register must fail when nothing listens")
 	}
@@ -173,6 +176,7 @@ func serveConfig(dir string) config {
 		resourceName:  "example.test/dev-zfs",
 		devicePath:    devNull,
 		pluginDir:     dir,
+		socketName:    defaultSocketName,
 		count:         1,
 		watchInterval: 20 * time.Millisecond,
 	}
@@ -188,7 +192,7 @@ func startServe(t *testing.T, dir string) (<-chan error, context.CancelFunc) {
 
 	fake := startFakeKubelet(t, dir)
 
-	if err := os.WriteFile(pluginSocketPath(dir), nil, 0o600); err != nil {
+	if err := os.WriteFile(pluginSocketPath(dir, defaultSocketName), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,6 +413,31 @@ func TestEnv(t *testing.T) {
 // The comment in envInt tells why a partial parse is worse than the
 // fallback. This test makes sure that each malformed or out-of-range value
 // falls back.
+func TestEnvName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "empty", value: "", want: defaultSocketName},
+		{name: "plain file name", value: "release-two.sock", want: "release-two.sock"},
+		{name: "absolute path", value: "/tmp/other.sock", want: defaultSocketName},
+		{name: "relative path", value: "sub/other.sock", want: defaultSocketName},
+		{name: "parent traversal", value: "../other.sock", want: defaultSocketName},
+		{name: "parent only", value: "..", want: defaultSocketName},
+		{name: "current directory", value: ".", want: defaultSocketName},
+		{name: "trailing separator", value: "other.sock/", want: defaultSocketName},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SOCKET_NAME", tc.value)
+
+			if got := envName("SOCKET_NAME", defaultSocketName); got != tc.want {
+				t.Errorf("envName(%q) = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEnvInt(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

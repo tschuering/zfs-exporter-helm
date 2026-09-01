@@ -25,8 +25,9 @@ devicePlugin:
   # Deliberately not the default, so that CI exercises the override path.
   resourceName: tschuering.github.io/dev-zfs-alt
   kubeletPluginDir: /var/lib/k0s/kubelet/device-plugins
-  count: 2
   priorityClassName: system-node-critical
+  podLabels:
+    tschuering.github.io/tier: node
 
 priorityClassName: system-node-critical
 
@@ -35,3 +36,8 @@ extraArgs:
 
 commonLabels:
   tschuering.github.io/owner: platform
+
+# The fallback for a host where /dev/zfs is mode 0600, so that CI renders this
+# path as well as the non-root default. runAsNonRoot must follow to false.
+runAsUser: 0
+runAsGroup: 0

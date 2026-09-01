@@ -8,11 +8,18 @@ metadata:
   labels:
     {{- include "zfs-exporter.labels" . | nindent 4 }}
 spec:
+  # The component label keeps this policy on the exporter pods. Without it the
+  # policy also governs the device-plugin pods, which serve no traffic.
   podSelector:
     matchLabels:
-      {{- include "zfs-exporter.selectorLabels" . | nindent 6 }}
+      {{- include "zfs-exporter.exporterSelectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    - Egress
+  # Egress appears in policyTypes and has no rule below, which denies every
+  # outbound connection. The exporter forks zpool and zfs on the node and it
+  # serves HTTP. It opens no connection of its own, and it resolves no name,
+  # so it needs no egress rule and not even one for DNS.
   ingress:
     - ports:
         - port: metrics
